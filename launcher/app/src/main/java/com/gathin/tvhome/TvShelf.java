@@ -5,7 +5,10 @@ import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.media.tv.TvContract;
 import android.net.Uri;
 import android.os.Handler;
@@ -100,6 +103,8 @@ final class TvShelf {
     /** The posters still wanted: a load queued for any other is dropped when its turn comes. */
     private volatile String wanted, prefetch;
     private boolean probed;
+    /** The poster's own scrim, stretched over each backdrop as it loads (setShade); null for none. */
+    private volatile Bitmap shade;
 
     TvShelf(Context context) {
         this.context = context.getApplicationContext();
@@ -268,7 +273,7 @@ final class TvShelf {
         wanted = uri;
         io.execute(() -> {
             if (!uri.equals(wanted)) return;
-            Bitmap bmp = gpu(load(uri));
+            Bitmap bmp = gpu(shaded(load(uri)));
             main.post(() -> {
                 if (bmp != null) memory.put(uri, bmp);
                 if (uri.equals(wanted)) done.accept(bmp);
@@ -306,6 +311,23 @@ final class TvShelf {
         if (bmp == null) bmp = loadOne(uri);
         int radius = bmp == null ? 0 : ShelfItems.softRadius(bmp.getWidth());
         return radius == 0 ? bmp : soften(bmp, radius);
+    }
+
+    /** The scrim painted over every backdrop from now on; set once, before the first poster. */
+    void setShade(Bitmap scrim) {
+        shade = scrim;
+    }
+
+    /** The backdrop with the scrim painted in, so the screen shows it without a blended layer over it. */
+    private Bitmap shaded(Bitmap bmp) {
+        Bitmap scrim = shade;
+        if (bmp == null || scrim == null) return bmp;
+        Bitmap out = bmp.isMutable() ? bmp : bmp.copy(Bitmap.Config.ARGB_8888, true);
+        if (out == null) return bmp;
+        if (out != bmp) bmp.recycle();
+        new Canvas(out).drawBitmap(scrim, null, new Rect(0, 0, out.getWidth(), out.getHeight()),
+                new Paint(Paint.FILTER_BITMAP_FLAG));
+        return out;
     }
 
     /**

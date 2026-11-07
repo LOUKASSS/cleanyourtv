@@ -2572,9 +2572,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         shelfArt.forceHasOverlappingRendering(false);
         shelfArt.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         // A poster is brighter and busier than the theme's photo: a little more shade on the text's side and along the
-        // top for the capsule, drawn over the poster so it comes and goes with it.
-        shelfArt.setForeground(scrimDrawable(new int[]{0x66000000, 0x1A000000, 0}, new float[]{0f, 0.4f, 0.65f},
-                new int[]{0x59000000, 0, 0}, new float[]{0f, 0.2f, 1f}));
+        // top for the capsule, painted into each poster as it loads (TvShelf.shade) so it comes and goes with it, and
+        // the GPU draws one opaque picture per frame instead of the picture plus a full-screen blend over it.
+        tvShelf.setShade(((BitmapDrawable) scrimDrawable(new int[]{0x66000000, 0x1A000000, 0}, new float[]{0f, 0.4f, 0.65f},
+                new int[]{0x59000000, 0, 0}, new float[]{0f, 0.2f, 1f})).getBitmap());
         root.addView(shelfArt, root.indexOfChild(appleBlur), new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
