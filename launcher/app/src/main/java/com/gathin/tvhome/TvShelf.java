@@ -44,7 +44,9 @@ final class TvShelf {
     /** A download larger than this is not a poster. */
     private static final int DOWNLOAD_MAX = 12 * 1024 * 1024;
     /** The disk cache holds posters already cropped: a new crop rule bumps this, and the old files age out. */
-    private static final String CROP = "c2:";
+    private static final String CROP = "c4:";
+    /** How bright a softened poster is kept: a little darker, as a scrim, so the text stays the sharp thing. */
+    private static final float SOFT_BRIGHTNESS = 0.88f;
 
     private static final String[] WATCH_NEXT = {
             TvContract.WatchNextPrograms._ID,
@@ -159,9 +161,10 @@ final class TvShelf {
         Map<String, List<ShelfItems.Item>> out = new HashMap<>();
         java.util.Set<String> pkgs = new java.util.HashSet<>(watchNext.keySet());
         pkgs.addAll(preview.keySet());
+        long now = System.currentTimeMillis();
         for (String pkg : pkgs) {
-            List<ShelfItems.Item> picked = ShelfItems.pick(
-                    watchNext.getOrDefault(pkg, Collections.emptyList()), preview.getOrDefault(pkg, Collections.emptyList()));
+            List<ShelfItems.Item> picked = ShelfItems.pick(watchNext.getOrDefault(pkg, Collections.emptyList()),
+                    preview.getOrDefault(pkg, Collections.emptyList()), now);
             if (!picked.isEmpty()) out.put(pkg, picked);
         }
         return out;
@@ -279,15 +282,50 @@ final class TvShelf {
         prefetch = uri;
         io.execute(() -> {
             if (!uri.equals(prefetch)) return;
-            File file = new File(dir, ShelfItems.cacheName(CROP + uri));
-            if (!file.exists()) {
+            if (!cacheFile(PosterUrl.upgrade(uri)).exists() && !cacheFile(uri).exists()) {
                 Bitmap bmp = load(uri);
                 if (bmp != null) bmp.recycle();
             }
         });
     }
 
+    /**
+     * The poster at its CDN's larger size where PosterUrl knows one, falling back once to the URL its app wrote when
+     * that fails; a picture still narrower than SHARP_W comes back softened (soften). Each URL is cached on disk under
+     * its own name, so a new upgrade rule fetches again; an original found on disk means the larger one failed before,
+     * and it is not asked for again.
+     */
     private Bitmap load(String uri) {
+        String better = PosterUrl.upgrade(uri);
+        Bitmap bmp = null;
+        if (!better.equals(uri)) {
+            bmp = fromDisk(uri);
+            if (bmp == null) bmp = loadOne(better);
+            if (bmp == null) Log.d(TAG, "larger poster failed, trying the original: " + PosterUrl.pattern(uri));
+        }
+        if (bmp == null) bmp = loadOne(uri);
+        int radius = bmp == null ? 0 : ShelfItems.softRadius(bmp.getWidth());
+        return radius == 0 ? bmp : soften(bmp, radius);
+    }
+
+    private File cacheFile(String uri) {
+        return new File(dir, ShelfItems.cacheName(CROP + uri));
+    }
+
+    /** A poster already fitted and cached on disk, or null. */
+    private Bitmap fromDisk(String uri) {
+        File file = cacheFile(uri);
+        if (!file.exists()) return null;
+        Bitmap cached = BitmapFactory.decodeFile(file.getPath(), argb());
+        if (cached != null) {
+            //noinspection ResultOfMethodCallIgnored
+            file.setLastModified(System.currentTimeMillis());
+            Log.d(TAG, "poster from disk " + cached.getWidth() + "x" + cached.getHeight() + " " + PosterUrl.pattern(uri));
+        }
+        return cached;
+    }
+
+    private Bitmap loadOne(String uri) {
         try {
             if (uri.startsWith("https://")) return fromNetwork(uri);
             if (uri.startsWith("content://") || uri.startsWith("android.resource://")) {
@@ -298,7 +336,7 @@ final class TvShelf {
                 try (InputStream in = cr.openInputStream(u)) {
                     BitmapFactory.decodeStream(in, null, o);
                 }
-                prepare(o);
+                prepare(o, uri);
                 try (InputStream in = cr.openInputStream(u)) {
                     return fit(BitmapFactory.decodeStream(in, null, o));
                 }
@@ -310,17 +348,11 @@ final class TvShelf {
         return null;
     }
 
-    /** From the disk cache, else downloaded once, fitted and written back as a small JPEG. */
+    /** From the disk cache, else downloaded once, fitted and written back as a JPEG. */
     private Bitmap fromNetwork(String uri) throws IOException {
-        File file = new File(dir, ShelfItems.cacheName(CROP + uri));
-        if (file.exists()) {
-            Bitmap cached = BitmapFactory.decodeFile(file.getPath(), rgb565());
-            if (cached != null) {
-                //noinspection ResultOfMethodCallIgnored
-                file.setLastModified(System.currentTimeMillis());
-                return cached;
-            }
-        }
+        Bitmap cached = fromDisk(uri);
+        if (cached != null) return cached;
+        File file = cacheFile(uri);
         if (!dir.isDirectory() && !dir.mkdirs()) return null;
         File part = new File(dir, file.getName() + ".part");
         HttpURLConnection http = (HttpURLConnection) new URL(uri).openConnection();
@@ -329,7 +361,7 @@ final class TvShelf {
             http.setReadTimeout(TIMEOUT_MS);
             http.setInstanceFollowRedirects(true);
             if (http.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                Log.w(TAG, "poster http " + http.getResponseCode());
+                Log.w(TAG, "poster http " + http.getResponseCode() + " " + PosterUrl.pattern(uri));
                 return null;
             }
             long total = 0;
@@ -348,13 +380,16 @@ final class TvShelf {
             BitmapFactory.Options o = new BitmapFactory.Options();
             o.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(part.getPath(), o);
-            prepare(o);
+            prepare(o, uri);
             Bitmap bmp = fit(BitmapFactory.decodeFile(part.getPath(), o));
             if (bmp != null) {
+                // High quality: this copy is what the backdrop shows from now on.
                 try (OutputStream out = new FileOutputStream(file)) {
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 85, out);
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 92, out);
                 }
                 trimDisk();
+            } else {
+                Log.w(TAG, "poster not decodable " + PosterUrl.pattern(uri));
             }
             return bmp;
         } finally {
@@ -363,23 +398,28 @@ final class TvShelf {
         }
     }
 
-    private static BitmapFactory.Options rgb565() {
+    private static BitmapFactory.Options argb() {
         BitmapFactory.Options o = new BitmapFactory.Options();
-        o.inPreferredConfig = Bitmap.Config.RGB_565;
+        o.inPreferredConfig = Bitmap.Config.ARGB_8888;
         return o;
     }
 
-    /** After a bounds-only decode: a power-of-two sample that keeps the 16:9 crop at least 1280x720, in 16 bits. */
-    private static void prepare(BitmapFactory.Options o) {
+    /**
+     * After a bounds-only decode: a power-of-two sample that keeps the 16:9 crop at least 1280x720, in 32 bits (16 bits
+     * bands the dark gradients of a film's poster). Logs the source's size, which is how the per-app sizes are known.
+     */
+    private static void prepare(BitmapFactory.Options o, String uri) {
         int[] crop = ShelfItems.crop16x9(o.outWidth, o.outHeight);
         int sample = 1;
         while (crop[2] / (sample * 2) >= MAX_W && crop[3] / (sample * 2) >= MAX_H) sample *= 2;
+        Log.d(TAG, "poster " + o.outWidth + "x" + o.outHeight + " " + o.outMimeType + " sample " + sample + " "
+                + PosterUrl.pattern(uri));
         o.inSampleSize = sample;
         o.inJustDecodeBounds = false;
-        o.inPreferredConfig = Bitmap.Config.RGB_565;
+        o.inPreferredConfig = Bitmap.Config.ARGB_8888;
     }
 
-    /** Crops the decoded picture to 16:9 and scales it down to 1280x720 at most, in one copy. */
+    /** Crops the decoded picture to 16:9 and scales it down, filtered, to 1280x720 at most, in one copy. */
     private static Bitmap fit(Bitmap src) {
         if (src == null) return null;
         int[] crop = ShelfItems.crop16x9(src.getWidth(), src.getHeight());
@@ -390,6 +430,24 @@ final class TvShelf {
         m.setScale(scale, scale);
         Bitmap out = Bitmap.createBitmap(src, crop[0], crop[1], crop[2], crop[3], m, true);
         if (out != src) src.recycle();
+        return out;
+    }
+
+    /**
+     * A picture too small to fill the screen sharp (ShelfItems.SHARP_W): blurred a little at its own size (two box
+     * passes of radius, ShelfItems.softRadius) and darkened, so the backdrop stretches a soft picture instead of its
+     * JPEG blocks. In place, once, on this thread.
+     */
+    private static Bitmap soften(Bitmap bmp, int radius) {
+        Bitmap out = bmp.isMutable() ? bmp : bmp.copy(Bitmap.Config.ARGB_8888, true);
+        if (out == null) return bmp;
+        if (out != bmp) bmp.recycle();
+        int w = out.getWidth(), h = out.getHeight();
+        int[] px = new int[w * h];
+        out.getPixels(px, 0, w, 0, 0, w, h);
+        AppleTv.blur(px, w, h, radius, 2);
+        AppleTv.darken(px, SOFT_BRIGHTNESS);
+        out.setPixels(px, 0, w, 0, 0, w, h);
         return out;
     }
 

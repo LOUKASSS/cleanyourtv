@@ -44,15 +44,39 @@ public class ShelfItemsTest {
                 wn("next", ShelfItems.NEXT, 500), wn("recent continue", ShelfItems.CONTINUE, 800),
                 wn("watchlist", ShelfItems.WATCHLIST, 999));
         assertEquals(Arrays.asList("recent continue", "old continue", "next", "new", "watchlist"),
-                titles(ShelfItems.pick(rows, Collections.emptyList())));
+                titles(ShelfItems.pick(rows, Collections.emptyList(), 1000L)));
     }
 
     @Test
     public void atMostFiveAndWatchNextBeatsPreview() {
         List<ShelfItems.Item> rows = new ArrayList<>();
         for (int k = 0; k < 8; k++) rows.add(wn("t" + k, ShelfItems.CONTINUE, k));
-        List<ShelfItems.Item> picked = ShelfItems.pick(rows, Collections.singletonList(pp("p", 1, 0, true, 1)));
+        List<ShelfItems.Item> picked = ShelfItems.pick(rows, Collections.singletonList(pp("p", 1, 0, true, 1)), 1000L);
         assertEquals(Arrays.asList("t7", "t6", "t5", "t4", "t3"), titles(picked));
+    }
+
+    @Test
+    public void rowsOlderThanSixtyDaysDropAndPreviewsTakeOver() {
+        long day = 24L * 60 * 60 * 1000, now = 1000 * day;
+        ShelfItems.Item recent = wn("recent", ShelfItems.CONTINUE, now - 3 * day);
+        ShelfItems.Item edge = wn("edge", ShelfItems.CONTINUE, now - 60 * day);
+        ShelfItems.Item stale = wn("stale", ShelfItems.CONTINUE, now - 807 * day);
+        ShelfItems.Item undated = wn("undated", ShelfItems.NEXT, 0);
+        assertEquals(Arrays.asList("recent", "edge", "undated"),
+                titles(ShelfItems.pick(Arrays.asList(stale, undated, edge, recent), Collections.emptyList(), now)));
+        assertTrue(ShelfItems.fresh(edge, now));
+        assertEquals(Collections.singletonList("p"), titles(ShelfItems.pick(Collections.singletonList(stale),
+                Collections.singletonList(pp("p", 1, 0, true, 1)), now)));
+    }
+
+    @Test
+    public void smallPostersAreSoftenedMoreTheSmallerTheyAre() {
+        assertEquals(0, ShelfItems.softRadius(1280));
+        assertEquals(0, ShelfItems.softRadius(ShelfItems.SHARP_W));
+        assertEquals(1, ShelfItems.softRadius(853));   // Netflix
+        assertEquals(2, ShelfItems.softRadius(640));
+        assertEquals(3, ShelfItems.softRadius(496));   // the TCL browser's promos
+        assertEquals(3, ShelfItems.softRadius(320));
     }
 
     @Test
@@ -63,7 +87,7 @@ public class ShelfItemsTest {
         ShelfItems.Item half = wn("half", ShelfItems.CONTINUE, 1);
         half.duration = 1000;
         half.position = 500;
-        assertEquals(Collections.singletonList("half"), titles(ShelfItems.pick(Arrays.asList(done, half), Collections.emptyList())));
+        assertEquals(Collections.singletonList("half"), titles(ShelfItems.pick(Arrays.asList(done, half), Collections.emptyList(), 1000L)));
     }
 
     @Test
@@ -71,7 +95,7 @@ public class ShelfItemsTest {
         List<ShelfItems.Item> rows = Arrays.asList(pp("hidden", 1, 9, false, 1), pp("light", 2, 1, true, 2),
                 pp("heavy", 2, 5, true, 3), pp("other", 3, 9, true, 4));
         assertEquals(Arrays.asList("heavy", "light", "other", "hidden"),
-                titles(ShelfItems.pick(Collections.emptyList(), rows)));
+                titles(ShelfItems.pick(Collections.emptyList(), rows, 1000L)));
     }
 
     @Test

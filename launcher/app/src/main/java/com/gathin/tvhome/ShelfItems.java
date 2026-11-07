@@ -20,6 +20,8 @@ final class ShelfItems {
     static final int MAX = 5;
     /** A "continue" row this far through (per mille) is finished, however long it lingers in the table. */
     static final int DONE_PERMILLE = 970;
+    /** A Watch Next row last engaged longer ago than this is stale (Disney+ keeps rows for years), ms. */
+    static final long MAX_AGE_MS = 60L * 24 * 60 * 60 * 1000;
     /** TvContract's ASPECT_RATIO_* values, widest first: 16:9, 3:2, 4:3, 1:1, 2:3, movie poster (about 1:1.441). */
     private static final int[] WIDEST_FIRST = {0, 1, 2, 3, 4, 5};
 
@@ -38,12 +40,14 @@ final class ShelfItems {
 
     /**
      * The shelf for one app: its Watch Next rows, continue first, then next, new and watchlist, each most recently
-     * engaged first, with finished "continue" rows dropped; or, with none, its preview programs, browsable channels
-     * first, a channel's programs by weight. At most MAX.
+     * engaged first, with finished "continue" rows and stale ones (fresh) dropped; or, with none, its preview programs,
+     * browsable channels first, a channel's programs by weight. At most MAX. now is the time, ms since the epoch.
      */
-    static List<Item> pick(List<Item> watchNext, List<Item> preview) {
+    static List<Item> pick(List<Item> watchNext, List<Item> preview, long now) {
         List<Item> out = new ArrayList<>();
-        for (Item i : watchNext) if (!(i.kind == CONTINUE && permille(i.duration, i.position) >= DONE_PERMILLE)) out.add(i);
+        for (Item i : watchNext) {
+            if (fresh(i, now) && !(i.kind == CONTINUE && permille(i.duration, i.position) >= DONE_PERMILLE)) out.add(i);
+        }
         if (out.isEmpty()) {
             out.addAll(preview);
             Collections.sort(out, Comparator.<Item>comparingInt(i -> i.browsable ? 0 : 1)
@@ -55,6 +59,11 @@ final class ShelfItems {
                     .thenComparing(Comparator.<Item>comparingLong(i -> i.engaged).reversed()));
         }
         return out.size() > MAX ? new ArrayList<>(out.subList(0, MAX)) : out;
+    }
+
+    /** Engaged within MAX_AGE_MS of now; a row that gives no engagement time is kept. */
+    static boolean fresh(Item i, long now) {
+        return i.engaged <= 0 || now - i.engaged <= MAX_AGE_MS;
     }
 
     private static int rank(int kind) {
@@ -145,6 +154,17 @@ final class ShelfItems {
         }
         int h = (int) Math.round(srcW * 9.0 / 16);
         return new int[]{0, (srcH - h) / (srcH > srcW ? 3 : 2), srcW, h};
+    }
+
+    /** A poster narrower than this, px after its 16:9 crop, is drawn softened rather than sharp and blocky. */
+    static final int SHARP_W = 960;
+
+    /**
+     * The box-blur radius, at the poster's own size, that hides its JPEG blocks once it is stretched over the 1920 px
+     * screen: none from SHARP_W, then more the smaller it is (853 px Netflix stills 1, 640 px 2, 496 px 3).
+     */
+    static int softRadius(int width) {
+        return width >= SHARP_W ? 0 : width >= 768 ? 1 : width >= 560 ? 2 : 3;
     }
 
     /** Which files to delete, oldest first, to bring a cache of these sizes and times down to max bytes. */

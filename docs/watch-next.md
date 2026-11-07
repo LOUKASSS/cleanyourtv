@@ -73,6 +73,16 @@ and preview channels. They live in the TV provider, behind `TvContract.WatchNext
   YouTube's "personalised" row and Spotify's single row (podcast episodes, unchanged over a day) to be generic
   rather than their accounts' picks; the TV has two YouTube and two Spotify accounts. Posters were `https://`
   apart from two `content://` and two `android.resource://`.
+- **Poster sizes, seen on a TCL 55" G08** (Google TV 14), from the URLs the apps wrote: Twitch 640x360 (its
+  `static-cdn.jtvnw.net` file name ends in `-640x360.jpg`; `-1280x720.jpg` is served too), Disney+ 544x306
+  (`.../ripcut-delivery/.../scale?format=webp&height=306&width=544`; `width=1280&height=720` is served), HBO Max
+  600x338 (`images.cdn.prd.api.discomax.com/...?w=600`; that CDN answers 400 to most widths: 1000 and 1920 work,
+  1280 does not), YouTube preview programs `sddefault.jpg` (640x480 with bars; `maxresdefault.jpg` is 1280x720
+  when the video has one, else 404), Netflix 853x480 (signed `nflxso.net` URLs with no size in them), Canal+,
+  Apple TV (`mzstatic.com/.../1920x1080.jpg`) and Rakuten (1500x2100 film posters) 1920 px or more, Prime Video up
+  to 3840x2160. Stretched over a 1920x1080 screen, a small picture shows its JPEG blocks: `appletv_shelf` asks the
+  CDNs above for the larger size (`PosterUrl`), falls back to the original URL once when that fails, and blurs a
+  picture still under 960 px wide a little, at its own size, rather than show it sharp.
 
 Source: `createSqlParams()` in `packages/providers/TvProvider/src/com/android/providers/tv/TvProvider.java`
 (AOSP) holds the `READ_TV_LISTINGS` and `searchable` logic; both permissions are defined in that
