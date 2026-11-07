@@ -54,6 +54,7 @@ rule sit on its wanted list until a screenshot arrives.
 | `lunar_date` | <img src="switches/lunar_date.jpg" width="320" alt="lunar_date on a TV"> |
 | `dock_band` | <img src="switches/dock_band.jpg" width="320" alt="dock_band on a TV"> |
 | `appletv_home` | <img src="switches/appletv_home.jpg" width="320" alt="appletv_home on a TV, the dock focused"> <img src="switches/appletv_home_grid.jpg" width="320" alt="appletv_home on a TV, in the grid"> |
+| `appletv_shelf` | <img src="switches/appletv_shelf.jpg" width="320" alt="appletv_shelf on a TV: the Apple TV app's first featured title behind the shelf"> |
 | `show_library_pill` | <img src="switches/show_library_pill.jpg" width="320" alt="show_library_pill on a TV"> |
 | `library_ok_opens` | <img src="switches/library_ok_opens.jpg" width="320" alt="library_ok_opens on a TV"> |
 | `library_excluded_apps` | <img src="switches/library_excluded_apps.png" width="320" alt="library_excluded_apps on a TV: a CANDY Android TV DVB2K's App library catalogue, factory-menu packages excluded"> |
