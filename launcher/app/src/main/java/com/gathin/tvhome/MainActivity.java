@@ -2767,6 +2767,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void advanceShelf() {
         List<ShelfItems.Item> items = shelfPkg == null ? null : shelfRows.get(shelfPkg);
         if (!shelfOnDock() || items == null || items.size() < 2 || lastFocused < 0 || lastFocused >= COLUMNS) return;
+        if (openPopup != null) {
+            // The Control Center (or another panel) covers Home: the shelf would cross-fade unseen. Wait for it.
+            handler.postDelayed(shelfAdvance, 8000);
+            return;
+        }
         shelfIndex = (shelfIndex + 1) % items.size();
         int position = lastFocused;
         String label = adapter.labelAt(position);
