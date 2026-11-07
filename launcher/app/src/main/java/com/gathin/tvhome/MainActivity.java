@@ -2162,11 +2162,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             avatar.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_person, 0, 0, 0);
             avatar.setPadding((int) (5 * density), 0, 0, 0);
         }
+        TextView time = findViewById(R.id.appleTime);
         View.OnFocusChangeListener lit = (v, focused) -> {
-            // Glass at rest (white 14%, a 32% rim); focused, brighter and a little larger.
-            capsule.setColor(focused ? 0x4DFFFFFF : 0x24FFFFFF);
-            capsule.setStroke(Math.max(1, (int) density), focused ? 0xB3FFFFFF : 0x52FFFFFF);
-            float s = focused ? 1.08f : 1f;
+            // Glass at rest (white 14%, a 32% rim); focused, as tvOS does: opaque white with dark text, a little larger.
+            capsule.setColor(focused ? 0xF2FFFFFF : 0x24FFFFFF);
+            capsule.setStroke(Math.max(1, (int) density), focused ? 0xFFFFFFFF : 0x52FFFFFF);
+            time.setTextColor(focused ? 0xFF1C1C1E : 0xFFFFFFFF);
+            float s = focused ? 1.12f : 1f;
             if (animations) appleStatus.animate().scaleX(s).scaleY(s).setDuration(reducedMotion ? Motion.REDUCED_MS : 160).start();
         };
         lit.onFocusChange(appleStatus, false);
