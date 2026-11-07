@@ -143,6 +143,14 @@ final class WallpaperPlayer {
         active = false;
     }
 
+    /**
+     * appletv_shelf: an opaque poster covers the whole screen, so the picture under it would only be drawn to be
+     * hidden; on a TV whose GPU is the bottleneck that full-screen pass is a good part of each frame.
+     */
+    void setCovered(boolean covered) {
+        image.setVisibility(covered ? View.INVISIBLE : View.VISIBLE);
+    }
+
     /** Drops the wallpaper texture when Home is hidden and Android asks the process to free memory. */
     void releaseForMemoryPressure() {
         if (current == null) return;

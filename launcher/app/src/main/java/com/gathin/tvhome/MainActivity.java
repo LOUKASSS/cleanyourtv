@@ -199,6 +199,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private Map<String, List<ShelfItems.Item>> shelfRows = java.util.Collections.emptyMap();
     /** appletv_shelf: the poster behind the shelf, the line under the title and the progress row with its bar. */
     private ImageView shelfArt;
+    /** The wallpaper is hidden under an opaque poster (fadeShelfArt). */
+    private boolean wallpaperCovered;
     private TextView shelfSub, shelfLeft;
     private View shelfProgress;
     private android.graphics.drawable.ClipDrawable shelfBar;
@@ -1417,6 +1419,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         releaseAppleBlur();
         if (tvShelf != null) {
             tvShelf.trim();
+            coverWallpaper(false);
             shelfArt.setImageDrawable(null);
             shelfArt.setAlpha(0f);
         }
@@ -2790,11 +2793,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (items.size() > 1) tvShelf.prefetch(ShelfItems.picture(items.get((shelfIndex + 1) % items.size())));
     }
 
-    /** Cross-fades the backdrop to bmp in 300 ms, or back to the wallpaper when it is null. */
+    /**
+     * Cross-fades the backdrop to bmp in 300 ms, or back to the wallpaper when it is null. While an opaque poster fills
+     * the screen the wallpaper under it is not drawn (coverWallpaper), so a fade from one poster to the next is a
+     * dissolve between the two, without the wallpaper showing through half-way.
+     */
     private void fadeShelfArt(Bitmap bmp) {
         int ms = !animations ? 0 : reducedMotion ? Motion.REDUCED_MS : 300;
         shelfArt.animate().cancel();
         if (bmp == null) {
+            handler.removeCallbacks(shelfSwapDone);
+            coverWallpaper(false);
             shelfArt.animate().alpha(0f).setDuration(ms).start();
             return;
         }
@@ -2802,24 +2811,60 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (now instanceof android.graphics.drawable.TransitionDrawable) {
             now = ((android.graphics.drawable.TransitionDrawable) now).getDrawable(1);
         }
+        boolean opaque = !bmp.hasAlpha();
         if (now instanceof BitmapDrawable && ((BitmapDrawable) now).getBitmap() == bmp && shelfArt.getAlpha() > 0f) {
-            shelfArt.animate().alpha(1f).setDuration(ms).start();
+            // A pending swap (shelfSwapDone) covers the wallpaper itself once its transition is over.
+            shelfArt.animate().alpha(1f).setDuration(ms).withEndAction(() -> {
+                if (!(shelfArt.getDrawable() instanceof android.graphics.drawable.TransitionDrawable)) coverWallpaper(opaque);
+            }).start();
             return;
         }
+        handler.removeCallbacks(shelfSwapDone);
         BitmapDrawable next = new BitmapDrawable(getResources(), bmp);
         if (now == null || shelfArt.getAlpha() == 0f || ms == 0) {
-            // Over the wallpaper: fade the layer in.
+            // Over the wallpaper: fade the layer in, and stop drawing the wallpaper once it is hidden.
+            coverWallpaper(false);
             shelfArt.setImageDrawable(next);
-            if (ms == 0) shelfArt.setAlpha(1f);
-            else shelfArt.animate().alpha(1f).setDuration(ms).start();
+            if (ms == 0) {
+                shelfArt.setAlpha(1f);
+                coverWallpaper(opaque);
+            } else {
+                shelfArt.animate().alpha(1f).setDuration(ms).withEndAction(() -> coverWallpaper(opaque)).start();
+            }
             return;
         }
+        // From poster to poster: the old one stays drawn whole and the new one fades in over it. A poster with
+        // transparency keeps the wallpaper under it.
+        boolean oldOpaque = now instanceof BitmapDrawable && ((BitmapDrawable) now).getBitmap() != null
+                && !((BitmapDrawable) now).getBitmap().hasAlpha();
+        coverWallpaper(oldOpaque && opaque);
         android.graphics.drawable.TransitionDrawable swap =
                 new android.graphics.drawable.TransitionDrawable(new Drawable[]{now, next});
-        swap.setCrossFadeEnabled(true);
+        swap.setCrossFadeEnabled(false);
         shelfArt.setImageDrawable(swap);
         shelfArt.setAlpha(1f);
         swap.startTransition(ms);
+        // Once done, the new poster alone: a finished transition without cross-fade would still draw both.
+        shelfSwapTo = next;
+        handler.postDelayed(shelfSwapDone, ms + 32);
+    }
+
+    private BitmapDrawable shelfSwapTo;
+    private final Runnable shelfSwapDone = () -> {
+        if (shelfSwapTo == null) return;
+        Drawable d = shelfArt.getDrawable();
+        if (d instanceof android.graphics.drawable.TransitionDrawable
+                && ((android.graphics.drawable.TransitionDrawable) d).getDrawable(1) == shelfSwapTo) {
+            shelfArt.setImageDrawable(shelfSwapTo);
+            coverWallpaper(shelfArt.getAlpha() >= 1f && !shelfSwapTo.getBitmap().hasAlpha());
+        }
+        shelfSwapTo = null;
+    };
+
+    private void coverWallpaper(boolean covered) {
+        if (covered == wallpaperCovered) return;
+        wallpaperCovered = covered;
+        wallpaperPlayer.setCovered(covered);
     }
 
     /** Swaps the backdrop to this app's artwork: fade out, swap, fade in, the way the shelf's name changes. */
