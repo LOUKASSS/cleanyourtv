@@ -1,5 +1,6 @@
 {
   "appletv_home": true,
+  "appletv_control_center": true,
   "columns": 6,
   "dock_title": true,
   "cinematic_dots": true,
