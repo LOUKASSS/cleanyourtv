@@ -229,6 +229,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
     private final List<Entry> items = new ArrayList<>();
+    /** Counts reloads, so a folder tile drawn for an older grid is dropped (drawFolderArt). */
+    private int reloads;
+    private java.util.concurrent.ExecutorService folderArtThread;
+    private final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+    private static final int FOLDER_W = 375, FOLDER_H = 225;
     /** The theme's folders and folder_hidden_apps (Folders), and hidden_apps in its order for the hidden folder. */
     private final List<Folders.Folder> folders;
     private final boolean folderHiddenApps;
@@ -276,6 +281,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * so focus follows it); hidden_apps wins over a card, and a card's package in dock_apps takes that slot.
      */
     void reload(List<Cards.Card> cards, List<ResolveInfo> leanback) {
+        int generation = ++reloads;
         PackageManager pm = ctx.getPackageManager();
         // The LEANBACK query is shared with the module-card check (MainActivity); copy it before adding
         // library apps so the caller's list stays as it was.
@@ -365,10 +371,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 if (member != null) members.add(member);
             }
             if (members.isEmpty()) continue;
+            // The empty glass now, the mini grid once drawn (drawFolderArt): it loads other apps' banners, which held
+            // Home's cold start up by about 90 ms on a TCL G08, for a tile that sits below the first screen.
             Entry folder = new Entry(Entry.FOLDER, f.name, new ComponentName(ctx, "folder:" + f.name),
-                    folderArt(members), null, null, 0);
+                    folderBase(), null, null, 0);
             folder.members = members;
             fresh.add(folder);
+            drawFolderArt(folder, generation);
         }
         // Retain the optional Default-home tile until dependent tile-ordering work is merged.
         if (showHomeSettings
@@ -429,12 +438,44 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * miniature, each banner cropped to 5:3 or icon on a dark card, rounded. 375x225, a tile's size and a half, so the
      * zoom stays sharp.
      */
+    /** The folder tile without its mini grid: the glass alone, at folderArt's size. */
+    private Drawable folderBase() {
+        Bitmap bmp = Bitmap.createBitmap(FOLDER_W, FOLDER_H, Bitmap.Config.ARGB_8888);
+        bmp.eraseColor(0x2EFFFFFF);
+        return new android.graphics.drawable.BitmapDrawable(ctx.getResources(), bmp);
+    }
+
+    /**
+     * Draws a folder's tile on a background thread, then swaps it in on the UI thread, unless the grid was reloaded
+     * (or the tile moved away) in the meantime.
+     */
+    private void drawFolderArt(Entry folder, int generation) {
+        if (folderArtThread == null) folderArtThread = java.util.concurrent.Executors.newSingleThreadExecutor();
+        List<Entry> members = new ArrayList<>(folder.members);
+        folderArtThread.execute(() -> {
+            Drawable art;
+            try {
+                art = folderArt(members);
+            } catch (RuntimeException e) {
+                return;   // the empty glass stays
+            }
+            main.post(() -> {
+                int at = items.indexOf(folder);
+                if (generation != reloads || at < 0) return;
+                Entry drawn = new Entry(Entry.FOLDER, folder.label, folder.component, art, null, null, 0);
+                drawn.members = folder.members;
+                items.set(at, drawn);
+                notifyItemChanged(at);
+            });
+        });
+    }
+
     private Drawable folderArt(List<Entry> closed) {
         // Only the apps the mini grid shows are loaded, and only while it is drawn.
         Entry stub = new Entry(Entry.FOLDER, "", new ComponentName(ctx, "folder-preview"), null, null, null, 0);
         stub.members = closed.subList(0, Math.min(closed.size(), Folders.PREVIEW_COLUMNS * Folders.PREVIEW_ROWS));
         List<Entry> members = openFolder(stub);
-        int w = 375, h = 225;
+        int w = FOLDER_W, h = FOLDER_H;
         Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bmp);
         canvas.drawColor(0x2EFFFFFF);
