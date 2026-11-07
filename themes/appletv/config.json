@@ -1,0 +1,13 @@
+{
+  "appletv_home": true,
+  "columns": 6,
+  "dock_title": true,
+  "cinematic_dots": true,
+  "background_color": "#000000",
+  "wallpaper": true,
+  "wallpaper_true_color": true,
+  "wallpaper_dim": 0,
+  "ambient_glow": false,
+  "app_glow": false,
+  "focus_overshoot": false
+}
