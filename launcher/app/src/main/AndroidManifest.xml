@@ -40,6 +40,13 @@
         <intent>
             <action android:name="android.settings.DISPLAY_SETTINGS" />
         </intent>
+        <!-- appletv_control_center offers its Sound and Subtitles tiles only where these resolve. -->
+        <intent>
+            <action android:name="android.settings.SOUND_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.CAPTIONING_SETTINGS" />
+        </intent>
         <intent>
             <action android:name="android.settings.MANAGE_APPLICATIONS_SETTINGS" />
         </intent>
@@ -244,6 +251,11 @@
                 <action android:name="com.gathin.tvhome.GUARD" />
             </intent-filter>
         </receiver>
+
+        <!-- appletv_control_center's sleep timer: its alarm at the end, which puts the TV to sleep (SleepTimer). -->
+        <receiver
+            android:name=".SleepTimer"
+            android:exported="false" />
 
         <service
             android:name=".InputKeyService"

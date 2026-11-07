@@ -250,6 +250,14 @@ final class Config {
     final boolean appleTvHome;
     /** With appletv_home, the top shelf shows the focused dock app's Watch Next or preview rows (config.xml, appletv_shelf); see TvShelf. */
     final boolean appleTvShelf;
+    /** With appletv_home, OK on the status capsule opens the Control Center panel (config.xml, appletv_control_center); see ControlCenter. */
+    final boolean appleTvControlCenter;
+    /** The theme's folders (config.json "folders"), as written; AppAdapter puts them together with Folders.assemble. */
+    final List<Folders.Folder> folders;
+    /** Every hidden_apps package in a last folder instead of nowhere (config.json "folder_hidden_apps"). */
+    final boolean folderHiddenApps;
+    /** That folder's name (config.json "hidden_folder_name"); empty for the translated "Others". */
+    final String hiddenFolderName;
     /** A rotating collection's groups by time of day, as file names (config.xml, wallpaper_moods); empty rotates through all of it. */
     final Map<String, Set<String>> wallpaperMoods;
     /** Shape of the glow behind the focused app (config.xml, glow_style): {@link #GLOW_RADIAL} or {@link #GLOW_HORIZON}. */
@@ -298,7 +306,8 @@ final class Config {
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
-                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap, boolean appleTvHome, boolean appleTvShelf) {
+                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap, boolean appleTvHome, boolean appleTvShelf,
+                   boolean appleTvControlCenter, List<Folders.Folder> folders, boolean folderHiddenApps, String hiddenFolderName) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -352,6 +361,10 @@ final class Config {
         this.glowSnap = glowSnap;
         this.appleTvHome = appleTvHome;
         this.appleTvShelf = appleTvHome && appleTvShelf;
+        this.appleTvControlCenter = appleTvHome && appleTvControlCenter;
+        this.folders = Collections.unmodifiableList(folders);
+        this.folderHiddenApps = folderHiddenApps;
+        this.hiddenFolderName = hiddenFolderName;
         this.libraryButton = libraryButton;
         this.showLibraryPill = showLibraryPill;
         this.wifiLabelWidth = wifiLabelWidth;
@@ -512,6 +525,10 @@ final class Config {
         boolean cinematic = res.getBoolean(R.bool.cinematic_home);
         boolean appleTv = res.getBoolean(R.bool.appletv_home);
         boolean appleShelf = res.getBoolean(R.bool.appletv_shelf);
+        boolean appleControlCenter = res.getBoolean(R.bool.appletv_control_center);
+        List<Folders.Folder> folders = new ArrayList<>();
+        boolean folderHiddenApps = false;
+        String hiddenFolderName = "";
         boolean ambientGlow = res.getBoolean(R.bool.ambient_glow);
         boolean appGlow = res.getBoolean(R.bool.app_glow);
         boolean fadeRows = res.getBoolean(R.bool.fade_rows);
@@ -629,6 +646,10 @@ final class Config {
             cinematic = bool(json, "cinematic_home", cinematic);
             appleTv = bool(json, "appletv_home", appleTv);
             appleShelf = bool(json, "appletv_shelf", appleShelf);
+            appleControlCenter = bool(json, "appletv_control_center", appleControlCenter);
+            folders = folders(json);
+            folderHiddenApps = bool(json, "folder_hidden_apps", folderHiddenApps);
+            hiddenFolderName = string(json, "hidden_folder_name", hiddenFolderName);
             ambientGlow = bool(json, "ambient_glow", ambientGlow);
             appGlow = bool(json, "app_glow", appGlow);
             fadeRows = bool(json, "fade_rows", fadeRows);
@@ -738,7 +759,8 @@ final class Config {
                 consumeVolumeKeys, homeIgnoreChannelKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly, inputsCecStateOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap, appleTv, appleShelf);
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap, appleTv, appleShelf,
+                appleControlCenter, folders, folderHiddenApps, hiddenFolderName);
     }
 
     /**
@@ -876,6 +898,24 @@ final class Config {
             if (!group.isEmpty()) groups.put(mood, Collections.unmodifiableSet(group));
         }
         return Collections.unmodifiableMap(groups);
+    }
+
+    /**
+     * {@code "folders": [{"name": "Kids", "apps": ["pkg", ...]}, ...]}: a folder without a name or a list of apps is
+     * left out on its own.
+     */
+    static List<Folders.Folder> folders(JSONObject json) {
+        List<Folders.Folder> out = new ArrayList<>();
+        JSONArray a = json.optJSONArray("folders");
+        if (a == null) return out;
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject f = a.optJSONObject(i);
+            if (f == null) continue;
+            String name = string(f, "name", "");
+            List<String> apps = stringList(f, "apps", Collections.emptyList());
+            if (!name.isEmpty() && !apps.isEmpty()) out.add(new Folders.Folder(name, apps));
+        }
+        return out;
     }
 
     private static String string(JSONObject o, String key, String fallback) {

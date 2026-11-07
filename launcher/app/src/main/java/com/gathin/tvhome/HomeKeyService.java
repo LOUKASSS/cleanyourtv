@@ -361,6 +361,13 @@ public class HomeKeyService extends AccessibilityService {
         return running != null;
     }
 
+    /** appletv_control_center's Standby: Android's "lock screen" action, which puts a TV to sleep (Android 9+). */
+    static boolean lockScreen() {
+        HomeKeyService service = running;
+        return service != null && Build.VERSION.SDK_INT >= 28
+                && service.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+    }
+
     /** The system power menu (Restart, and Power off where the firmware has it); the TV asks before it acts. */
     static void openPowerMenu() {
         HomeKeyService service = running;

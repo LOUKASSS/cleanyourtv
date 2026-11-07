@@ -162,4 +162,21 @@
     <string name="shelf_quoted">“%1$s”</string>
     <string name="shelf_left_min">נותרו %1$d דק׳</string>
     <string name="shelf_left_hours">נותרו %1$d שע׳ %2$02d דק׳</string>
+    <string name="cc_standby">המתנה</string>
+    <string name="cc_standby_sub">כיבוי המסך</string>
+    <string name="cc_standby_options">אפשרויות חשמל</string>
+    <string name="cc_library">אפליקציות</string>
+    <string name="cc_timer">טיימר שינה</string>
+    <string name="cc_timer_off">כבוי</string>
+    <string name="cc_timer_left_min">נותרו %1$d דק׳</string>
+    <string name="cc_timer_left_hours">נותרו %1$d שע׳ %2$02d דק׳</string>
+    <string name="cc_network">רשת</string>
+    <string name="cc_sound">צליל</string>
+    <string name="cc_sound_sub">פלט שמע</string>
+    <string name="cc_subtitles">כתוביות</string>
+    <string name="cc_subtitles_sub">סגנון ושפה</string>
+    <string name="cc_settings">הגדרות</string>
+    <string name="cc_settings_sub">טלוויזיה</string>
+    <string name="cc_launcher_settings">הגדרות המפעיל</string>
+    <string name="hidden_folder_name">אחרות</string>
 </resources>

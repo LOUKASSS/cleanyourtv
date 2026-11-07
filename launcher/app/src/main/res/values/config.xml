@@ -512,6 +512,13 @@
          launcher's only network use. An app with no rows keeps the wallpaper and its name. false reads nothing.
          Can also be set with "appletv_shelf": true in a theme's config.json. -->
     <bool name="appletv_shelf">false</bool>
+    <!-- With appletv_home: OK on the status capsule opens a Control Center, a glass panel on the right over a blurred
+         copy of the screen: Standby and a sleep timer (Off, 15, 30, 60, 90 min; both need the launcher's InputKeyService
+         or HomeKeyService on, as they use Android's lock-screen action, and are left out without one), the network
+         (OK: Wi-Fi settings), Sound, Subtitles and the TV's settings (each only where the TV opens that screen), the
+         launcher's settings, and the inputs list. false keeps the menu with Inputs, Network and Settings. Can also be
+         set with "appletv_control_center": true in a theme's config.json. -->
+    <bool name="appletv_control_center">false</bool>
 
     <!-- The glow behind the dock in the focused app's colour (red for YouTube, blue for Prime Video). false keeps
          only background_color or the wallpaper behind everything. Can also be set with "ambient_glow": false in a

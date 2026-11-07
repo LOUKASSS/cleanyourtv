@@ -176,6 +176,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private int glassAccent;
     /** config.xml appletv_home: the Apple TV look on top of the cinematic shelf (setUpAppleTv). */
     private boolean appleTv;
+    /** appletv_control_center: OK on the status capsule opens ControlPanel instead of the menu; and what it shows. */
+    private boolean controlCenter, controlCenterPending;
+    private String controlCenterName = "";
+    private ControlPanel.Network network = new ControlPanel.Network("", false, false);
+    /** The config Home was built from, for an open folder's own AppAdapter. */
+    private Config currentConfig;
     /** appletv_home: focus is below the dock, so the grid is lifted over the blurred backdrop. */
     private boolean appleInGrid;
     /** appletv_home: where the grid sits in the window, reused by fadeUnderStatus. */
@@ -732,6 +738,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         }
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
+        currentConfig = cfg;
         dockApps = cfg.dockApps;
         fillDockLeavesSlots = !cfg.fillDock;
         Order savedOrder = Order.load(Order.file(this));
@@ -1836,12 +1843,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         libraryFocusPending = false;
         libraryFromTopBar = false;
         libraryFromVpnPill = false;
+        libraryFromCapsule = false;
         appLibrary = new AppLibraryDialog(this, animations, reducedMotion, appLibrarySelection, libraryOkOpens, adapter::containsPackage, () -> reloadApps(false), () -> {
             appLibrary = null;
             openPopup = null;
             if (libraryFromTopBar) {
                 libraryFromTopBar = false;
                 btnLibraryTop.requestFocus();
+                return;
+            }
+            // appletv_control_center's Apps row: back to the status capsule, where it was opened from.
+            if (libraryFromCapsule && appleStatus != null) {
+                libraryFromCapsule = false;
+                appleStatus.requestFocus();
                 return;
             }
             boolean fromVpnPill = libraryFromVpnPill;
@@ -2206,7 +2220,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         };
         lit.onFocusChange(appleStatus, false);
         appleStatus.setOnFocusChangeListener(lit);
-        appleStatus.setOnClickListener(v -> showTopMenu());
+        controlCenter = cfg.appleTvControlCenter;
+        controlCenterName = cfg.greetingName;
+        appleStatus.setOnClickListener(v -> {
+            if (controlCenter) openControlCenter();
+            else showTopMenu();
+        });
         appleStatus.setOnLongClickListener(v -> {
             showSettingsMenu();
             return true;
@@ -2336,6 +2355,198 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         appleBlur.setImageDrawable(null);
         appleBlurFrom = null;
     }
+
+    // ---- appletv_control_center and folders -------------------------------------------------------
+
+    /**
+     * The screen as it is, at BLUR_W x BLUR_H (PixelCopy scales the window down), blurred and darkened off the UI
+     * thread: the backdrop of the Control Center and of an open folder. null when the copy fails.
+     */
+    private void blurredSnapshot(float brightness, java.util.function.Consumer<Bitmap> then) {
+        Bitmap shot = Bitmap.createBitmap(AppleTv.BLUR_W, AppleTv.BLUR_H, Bitmap.Config.ARGB_8888);
+        try {
+            android.view.PixelCopy.request(getWindow(), shot, result -> {
+                if (result != android.view.PixelCopy.SUCCESS) {
+                    then.accept(null);
+                    return;
+                }
+                new Thread(() -> {
+                    int[] px = new int[AppleTv.BLUR_W * AppleTv.BLUR_H];
+                    shot.getPixels(px, 0, AppleTv.BLUR_W, 0, 0, AppleTv.BLUR_W, AppleTv.BLUR_H);
+                    AppleTv.blur(px, AppleTv.BLUR_W, AppleTv.BLUR_H, 6, 3);
+                    AppleTv.darken(px, brightness);
+                    shot.setPixels(px, 0, AppleTv.BLUR_W, 0, 0, AppleTv.BLUR_W, AppleTv.BLUR_H);
+                    handler.post(() -> then.accept(shot));
+                }, "snapshot-blur").start();
+            }, handler);
+        } catch (IllegalArgumentException e) {
+            then.accept(null);
+        }
+    }
+
+    /** OK on the status capsule (appletv_control_center): the Control Center over a blurred copy of the screen. */
+    private void openControlCenter() {
+        if (openPopup != null || controlCenterPending) return;
+        controlCenterPending = true;
+        blurredSnapshot(ControlCenter.SNAPSHOT_BRIGHTNESS, backdrop -> {
+            controlCenterPending = false;
+            if (isDestroyed() || !resumed || openPopup != null) return;
+            ControlPanel panel = new ControlPanel(this, controlCenterHost, backdrop, controlCenterName, network,
+                    animations, reducedMotion, () -> {
+                        if (openPopup != null && !openPopup.isShowing()) openPopup = null;
+                    });
+            openPopup = panel.popup;
+            panel.show(root);
+        });
+    }
+
+    private final ControlPanel.Host controlCenterHost = new ControlPanel.Host() {
+        @Override
+        public void listInputs(InputSink sink) {
+            MainActivity.this.listInputs(sink, false, new ArrayList<>(),
+                    coocaaSources ? CoocaaSources.list(MainActivity.this) : Collections.emptyList(), () -> { });
+        }
+
+        @Override
+        public void openNetwork() {
+            openNetworkPill();
+        }
+
+        @Override
+        public void openLauncherSettings() {
+            startActivityForResult(new Intent(MainActivity.this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
+        }
+
+        @Override
+        public boolean libraryOn() {
+            return appLibraryEnabled;
+        }
+
+        @Override
+        public void openLibrary() {
+            onLibraryRequested();
+            libraryFromCapsule = true;
+        }
+
+        @Override
+        public void open(Intent intent) {
+            MainActivity.this.open(intent);
+        }
+
+        @Override
+        public Intent systemIntent(String standardAction) {
+            return MainActivity.this.systemIntent(standardAction);
+        }
+
+        @Override
+        public CharSequence time() {
+            return ((TextView) findViewById(R.id.appleTime)).getText();
+        }
+    };
+
+    /**
+     * OK on a folder tile: its apps as tiles in a glass panel in the middle of the screen, over a blurred copy of
+     * Home. The tiles are the grid's own (a second AppAdapter showing just them), so they zoom, gloss and open apps
+     * the same way; Back closes it, and leaving Home does too (onPause).
+     */
+    @Override
+    public void onOpenFolder(AppAdapter.Entry folder) {
+        if (openPopup != null || controlCenterPending || folder.members == null || folder.members.isEmpty()) return;
+        controlCenterPending = true;
+        blurredSnapshot(AppleTv.BLUR_BRIGHTNESS, backdrop -> {
+            controlCenterPending = false;
+            if (isDestroyed() || !resumed || openPopup != null) return;
+            showFolder(folder, backdrop);
+        });
+    }
+
+    private void showFolder(AppAdapter.Entry folder, Bitmap backdrop) {
+        FrameLayout screen = new FrameLayout(this);
+        ImageView behind = new ImageView(this);
+        behind.setScaleType(ImageView.ScaleType.FIT_XY);
+        if (backdrop != null) behind.setImageBitmap(backdrop);
+        else behind.setImageDrawable(new ColorDrawable(0xE6000000));
+        screen.addView(behind, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        int columns = Folders.overlayColumns(folder.members.size());
+        int rowsCount = (folder.members.size() + columns - 1) / columns;
+        int cell = (int) ((AppleTv.TILE_W + AppleTv.GAP) * density);
+        int item = Math.round((AppleTv.TILE_H + 2 * AppleTv.ITEM_PAD + AppleTv.NAME_GAP + AppleTv.NAME_H) * density);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        int pad = (int) (22 * density);
+        // Room at the bottom for the focused bottom row's name.
+        panel.setPadding(pad, (int) (18 * density), pad, (int) (16 * density));
+        GradientDrawable glassBg = new GradientDrawable();
+        glassBg.setCornerRadius(28 * density);
+        glassBg.setColor(0x1FFFFFFF);
+        glassBg.setStroke(Math.max(1, (int) density), 0x40FFFFFF);
+        panel.setBackground(glassBg);
+        TextView title = new TextView(this);
+        title.setText(folder.label);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f);
+        title.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        title.setSingleLine(true);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleLp.bottomMargin = (int) (14 * density);
+        panel.addView(title, titleLp);
+
+        RecyclerView tiles = new RecyclerView(this);
+        tiles.setLayoutManager(new GridLayoutManager(this, columns));
+        tiles.setItemAnimator(null);
+        // Rows past the third stay hidden until focus scrolls them in; the top padding leaves room for the zoom.
+        tiles.setClipToPadding(false);
+        tiles.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        int vpad = (int) (10 * density);
+        tiles.setPadding(0, vpad, 0, 0);
+        AppAdapter folderAdapter = new AppAdapter(this, folderListener, columns, currentConfig);
+        folderAdapter.showOnly(adapter.openFolder(folder));
+        tiles.setAdapter(folderAdapter);
+        // Up to three rows at once; a bigger folder scrolls in its panel.
+        int height = Math.min(rowsCount, 3) * item + vpad;
+        panel.addView(tiles, new LinearLayout.LayoutParams(columns * cell, height));
+        FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        screen.addView(panel, panelLp);
+
+        PopupWindow popup = new PopupWindow(screen, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
+        popup.setAnimationStyle(0);
+        popup.setClippingEnabled(false);
+        popup.setOnDismissListener(() -> {
+            if (openPopup == popup) openPopup = null;
+            tiles.setAdapter(null);
+        });
+        openPopup = popup;
+        // In: the backdrop fades up and the panel grows from 92%, as a tvOS folder opens.
+        int ms = !animations ? 0 : reducedMotion ? Motion.REDUCED_MS : 220;
+        behind.setAlpha(0f);
+        behind.animate().alpha(1f).setDuration(ms).start();
+        panel.setAlpha(0f);
+        panel.setScaleX(0.92f);
+        panel.setScaleY(0.92f);
+        panel.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(ms)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+        popup.showAtLocation(root, Gravity.NO_GRAVITY, 0, 0);
+        tiles.post(() -> {
+            RecyclerView.ViewHolder first = tiles.findViewHolderForAdapterPosition(0);
+            if (first != null) first.itemView.findViewById(R.id.card).requestFocus();
+        });
+    }
+
+    /** The open folder's tiles: they open their app; nothing else of Home's follows their focus. */
+    private final AppAdapter.TileListener folderListener = new AppAdapter.TileListener() {
+        @Override public void onTileFocused(int position, View card) { }
+        @Override public boolean onTileVerticalKey(int position, int keyCode) { return false; }
+        @Override public void onLibraryRequested() { }
+        @Override public void onLibraryFocused() { }
+        @Override public void onTileLongPress(int position, View card) { }
+        @Override public void onLibraryUp() { }
+        @Override public void onOpenInput(String inputId) { openInput(inputId); }
+        @Override public void onOpenFolder(AppAdapter.Entry folder) { }
+    };
 
     // ---- appletv_shelf ---------------------------------------------------------------------------
 
@@ -3551,6 +3762,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         } catch (Exception ignored) {
         }
+        network = new ControlPanel.Network(text, icon == R.drawable.ic_ethernet, online);
         // With a VPN app configured, a VPN that is down matters too: show a red "VPN off" capsule then.
         boolean vpnDown = !vpn && online && !vpnApp.isEmpty();
         if (vpnPill) updateVpnPill(vpn);
@@ -3623,6 +3835,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean libraryFromTopBar;
     /** The open library came from the VPN pill (vpn_pill, no VPN app): closing it returns there while the pill still shows. */
     private boolean libraryFromVpnPill;
+    /** The library was opened from the Control Center (appletv_control_center): closing it focuses the capsule. */
+    private boolean libraryFromCapsule;
 
     /** Turns a labelled top pill into the round TopButtonIcon shape: no text, the icon centred by even padding. */
     private void makeIconOnly(TextView pill) {
@@ -3992,11 +4206,73 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
         int width = Math.max(anchor.getWidth(), (int) (150 * density));
         final PopupWindow popup = glassPopup(panel, width);
+        InputSink sink = new InputSink() {
+            @Override
+            public View inputRow(int icon, String title, int state, Runnable action) {
+                return addInputRow(rows, popup, icon, title, state, action);
+            }
 
-        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+            @Override
+            public View inputSeparator() {
+                return addSeparator(rows);
+            }
+
+            @Override
+            public int inputCount() {
+                return rows.getChildCount();
+            }
+        };
         // inputs_connected_only: ports without a connected device and the AV jacks fold behind a "More inputs" row.
-        boolean connectedOnly = inputsConnectedOnly;
         List<View> folded = new ArrayList<>();
+        listInputs(sink, inputsConnectedOnly, folded, coocaa, () -> {
+            if (folded.isEmpty()) return;
+            View more = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+            ((ImageView) more.findViewById(R.id.icon)).setImageResource(R.drawable.ic_input);
+            ((TextView) more.findViewById(R.id.title)).setText(R.string.more_inputs);
+            more.findViewById(R.id.status).setVisibility(View.GONE);
+            more.findViewById(R.id.dot).setVisibility(View.GONE);
+            more.setOnClickListener(v -> {
+                for (View f : folded) f.setVisibility(View.VISIBLE);
+                rows.removeView(more);
+                for (View f : folded) {
+                    if (f.isFocusable()) { f.requestFocus(); break; }
+                }
+            });
+            rows.addView(more);
+        });
+        if (rows.getChildCount() == 0) {
+            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
+
+        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
+        dropIn(popup, panel, anchor, alignment);
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            View child = rows.getChildAt(i);
+            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) { child.requestFocus(); break; }
+        }
+    }
+
+    /** Where the inputs list goes: the Inputs menu's popup, or the Control Center's box (ControlPanel). */
+    interface InputSink {
+        /** Adds a row and returns it; state is a TvInputManager INPUT_STATE_*, or -1 for none shown. */
+        View inputRow(int icon, String title, int state, Runnable action);
+        View inputSeparator();
+        int inputCount();
+    }
+
+    /**
+     * The Inputs menu's rows, in its order: HDMI ports (CEC devices on them by name), AV and the rest, a Coocaa OS or
+     * source-panel row where the TV has no TvInputManager list, then Live TV. With connectedOnly, rows for ports
+     * without a device go into folded, hidden, and afterPorts runs where the "More inputs" row belongs.
+     */
+    private void listInputs(InputSink sink, boolean connectedOnly, List<View> folded,
+                            List<CoocaaSources.Source> coocaa, Runnable afterPorts) {
+        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         boolean sawNonHdmi = false;
         // An explicit root URI asks the Live TV app to leave any HDMI source selected by its own UI.
         boolean rootChannel = TvContract.Channels.CONTENT_URI.toString().equals(liveTvInputId);
@@ -4072,8 +4348,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
                 CharSequence custom = InputNames.tidy(info.loadCustomLabel(this));
                 boolean named = custom != null && custom.length() > 0 && !custom.toString().equals(label);
-                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) {
-                    View line = addSeparator(rows);
+                if (!hdmi && sink.inputCount() > 0 && !sawNonHdmi) {
+                    View line = sink.inputSeparator();
                     if (connectedOnly) fold(line, folded);
                 }
                 if (!hdmi) sawNonHdmi = true;
@@ -4088,7 +4364,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                         String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
                         final String deviceId = device.getId();
                         int state = hdmiStateBogus && !inputsCecStateOnly ? -1 : tim.getInputState(deviceId);
-                        View row = addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
+                        View row = sink.inputRow(R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
                         if (connectedOnly && InputFold.folds(true, state)) fold(row, folded);
                     }
                     continue;
@@ -4099,32 +4375,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 // Analog AV jacks have no hotplug detection, and some TVs report them as always connected
                 // (TCL Smart TV Pro G03 says "Connected" with nothing plugged in), so AV rows show no state.
                 int state = !hdmi || hdmiStateBogus ? -1 : tim.getInputState(id);
-                View row = addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
+                View row = sink.inputRow(hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
                         () -> openInput(id));
                 if (connectedOnly && InputFold.folds(hdmi, state)) fold(row, folded);
             }
         }
-        if (!folded.isEmpty()) {
-            View more = getLayoutInflater().inflate(R.layout.item_input, rows, false);
-            ((ImageView) more.findViewById(R.id.icon)).setImageResource(R.drawable.ic_input);
-            ((TextView) more.findViewById(R.id.title)).setText(R.string.more_inputs);
-            more.findViewById(R.id.status).setVisibility(View.GONE);
-            more.findViewById(R.id.dot).setVisibility(View.GONE);
-            more.setOnClickListener(v -> {
-                for (View f : folded) f.setVisibility(View.VISIBLE);
-                rows.removeView(more);
-                for (View f : folded) {
-                    if (f.isFocusable()) { f.requestFocus(); break; }
-                }
-            });
-            rows.addView(more);
-        }
+        afterPorts.run();
         // Coocaa OS registers nothing with TvInputManager; com.skyworth.tv lists its sources instead.
-        if (rows.getChildCount() == 0) {
+        if (sink.inputCount() == 0) {
             for (CoocaaSources.Source s : coocaa) {
                 int icon = "HDMI".equals(s.name) ? R.drawable.ic_input
                         : "VOD".equals(s.name) ? R.drawable.ic_livetv : R.drawable.ic_av;
-                addInputRow(rows, popup, icon, s.label, -1, () -> {
+                sink.inputRow(icon, s.label, -1, () -> {
                     if (!CoocaaSources.open(this, s)) {
                         Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
                     }
@@ -4132,8 +4394,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
         // Nothing to list where there is no TvInputManager: the TV's own source panel switches inputs.
-        if (rows.getChildCount() == 0 && !sourcePanelService.isEmpty()) {
-            addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, this::openSourcePanel);
+        if (sink.inputCount() == 0 && !sourcePanelService.isEmpty()) {
+            sink.inputRow(R.drawable.ic_input, getString(R.string.inputs), -1, this::openSourcePanel);
         }
         Intent liveTv = liveTvIntent();
         if (liveTv != null && tunerId != null) {
@@ -4161,24 +4423,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
         if (liveTv != null) {
-            if (rows.getChildCount() > 0) addSeparator(rows);
+            if (sink.inputCount() > 0) sink.inputSeparator();
             final Intent liveTvIntent = liveTv;
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
-        }
-        if (rows.getChildCount() == 0) {
-            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
-        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
-
-        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
-        dropIn(popup, panel, anchor, alignment);
-        for (int i = 0; i < rows.getChildCount(); i++) {
-            View child = rows.getChildAt(i);
-            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) { child.requestFocus(); break; }
+            sink.inputRow(R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
         }
     }
 

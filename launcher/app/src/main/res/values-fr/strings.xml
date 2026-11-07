@@ -108,4 +108,21 @@
     <string name="shelf_quoted">« %1$s »</string>
     <string name="shelf_left_min">%1$d min restantes</string>
     <string name="shelf_left_hours">%1$d h %2$02d restantes</string>
+    <string name="cc_standby">Veille</string>
+    <string name="cc_standby_sub">Éteindre l’écran</string>
+    <string name="cc_standby_options">Options d’énergie</string>
+    <string name="cc_library">Apps</string>
+    <string name="cc_timer">Minuterie</string>
+    <string name="cc_timer_off">Désactivée</string>
+    <string name="cc_timer_left_min">Reste %1$d min</string>
+    <string name="cc_timer_left_hours">Reste %1$d h %2$02d</string>
+    <string name="cc_network">Réseau</string>
+    <string name="cc_sound">Son</string>
+    <string name="cc_sound_sub">Sortie audio</string>
+    <string name="cc_subtitles">Sous-titres</string>
+    <string name="cc_subtitles_sub">Style et langue</string>
+    <string name="cc_settings">Réglages</string>
+    <string name="cc_settings_sub">Téléviseur</string>
+    <string name="cc_launcher_settings">Réglages du launcher</string>
+    <string name="hidden_folder_name">Autres</string>
 </resources>

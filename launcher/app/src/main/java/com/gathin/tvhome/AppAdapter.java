@@ -63,10 +63,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void onLibraryUp();
         /** A tile whose launch_actions entry is "input:<id>": switch to that TV input instead of opening an app. */
         void onOpenInput(String inputId);
+        /** OK on a folder tile (the theme's "folders", folder_hidden_apps): the activity opens it. */
+        void onOpenFolder(Entry folder);
     }
 
     static final class Entry {
-        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3;
+        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3, FOLDER = 4;
 
         final int kind;
         final String label;
@@ -80,6 +82,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int ambient;
         /** uniform_tiles card fill, top and bottom colour; null until sampled from the icon. */
         int[] backdrop;
+        /** A folder's apps, in order, without their artwork (openFolder loads it); null for every other tile. */
+        List<Entry> members;
+        /** A folder member's activity, to load its artwork when the folder opens. */
+        ResolveInfo source;
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
             this(APP, label, component, banner, icon, null, 0);
@@ -204,7 +210,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final Set<String> libraryPreload;
     private final boolean animations;
     private final boolean advancedEffects;
-    private final boolean showLibrary;
+    private boolean showLibrary;
     /** Packages with a leanback entry at the last reload(): their tiles launch with the leanback category. */
     private Set<String> leanbackPackages = new HashSet<>();
     private final boolean showHomeSettings;
@@ -223,6 +229,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
     private final List<Entry> items = new ArrayList<>();
+    /** The theme's folders and folder_hidden_apps (Folders), and hidden_apps in its order for the hidden folder. */
+    private final List<Folders.Folder> folders;
+    private final boolean folderHiddenApps;
+    private final String hiddenFolderName;
+    private final List<String> hiddenList;
 
     AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
         this.ctx = ctx;
@@ -251,6 +262,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
         this.uniformTiles = cfg.uniformTiles;
+        this.folders = cfg.folders;
+        this.folderHiddenApps = cfg.folderHiddenApps;
+        this.hiddenFolderName = cfg.hiddenFolderName.isEmpty() ? ctx.getString(R.string.hidden_folder_name) : cfg.hiddenFolderName;
+        this.hiddenList = cfg.hiddenApps;
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -282,6 +297,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         Map<String, Cards.Card> cardByPkg = new HashMap<>();
         for (Cards.Card c : cards) cardByPkg.put(c.pkg, c);
+        // Folders take their apps out of the grid; the hidden folder takes hidden_apps, which stay out of it anyway.
+        List<Folders.Folder> shownFolders = Collections.emptyList();
+        // appletv_home only: the folder tile and its panel are drawn at that mode's 5:3 tile size.
+        if (appleTv && (!folders.isEmpty() || folderHiddenApps)) {
+            Set<String> installed = new HashSet<>();
+            for (ResolveInfo ri : found) if (ri.activityInfo != null && ri.activityInfo.exported) installed.add(ri.activityInfo.packageName);
+            installed.remove(ctx.getPackageName());
+            shownFolders = Folders.assemble(folders, hiddenList, folderHiddenApps, hiddenFolderName, installed);
+        }
+        Set<String> inFolders = Folders.members(shownFolders);
+        Map<String, Entry> folderApps = new HashMap<>();
         List<Entry> fresh = new ArrayList<>();
         // Some system apps declare two leanback entry points under one name (Sony's Timers & Clock on the
         // BRAVIA VU31), which would show as two identical tiles: keep the first per package and label.
@@ -289,25 +315,27 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || !ri.activityInfo.exported
-                    || !LibraryApps.visible(tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
+            boolean foldered = inFolders.contains(pkg);
+            if (foldered && folderApps.containsKey(pkg)) continue;   // one tile per app in a folder
+            if (pkg.equals(ctx.getPackageName()) || !ri.activityInfo.exported || !foldered
+                    && !LibraryApps.visible(tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
-            Cards.Card card = cardByPkg.get(pkg);
+            Cards.Card card = foldered ? null : cardByPkg.get(pkg);
             if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
             // Same cleaner as the card prompt: an app label with a bidi override or line separator must not
             // redraw the tile name as something else (#117).
             String label = card != null ? card.label : Cards.cleanLabel(
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
-            Drawable banner = null;
-            // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
-            if (!(uniformTiles && card == null)) {
-                banner = bundledBanner(appBanners.get(pkg));
-                if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
+            if (foldered) {
+                // A folder's apps keep no artwork while it is closed: 17 hidden apps' banners are 12 MB.
+                Entry member = new Entry(label, component, null, null);
+                member.source = ri;
+                folderApps.put(pkg, member);
+                continue;
             }
-            // The icon is only drawn (and sampled for the glow) when there is no banner, so a tile with a
-            // banner skips loading and decoding it.
-            Drawable icon = banner == null ? ri.loadIcon(pm) : null;
+            Drawable[] art = art(pm, ri, pkg, card != null);
+            Drawable banner = art[0], icon = art[1];
             if (card != null) {
                 fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent));
             } else {
@@ -329,6 +357,19 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (ca != cb) return ca ? -1 : 1;
             return a.label.compareToIgnoreCase(b.label);
         });
+        // The folders follow the apps, the hidden folder last.
+        for (Folders.Folder f : shownFolders) {
+            List<Entry> members = new ArrayList<>();
+            for (String pkg : f.apps) {
+                Entry member = folderApps.get(pkg);
+                if (member != null) members.add(member);
+            }
+            if (members.isEmpty()) continue;
+            Entry folder = new Entry(Entry.FOLDER, f.name, new ComponentName(ctx, "folder:" + f.name),
+                    folderArt(members), null, null, 0);
+            folder.members = members;
+            fresh.add(folder);
+        }
         // Retain the optional Default-home tile until dependent tile-ordering work is merged.
         if (showHomeSettings
                 && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
@@ -357,6 +398,93 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         icon.setBounds((w - side) / 2, (h - side) / 2, (w + side) / 2, (h + side) / 2);
         icon.draw(canvas);
         return new android.graphics.drawable.BitmapDrawable(ctx.getResources(), bmp);
+    }
+
+    /**
+     * A tile's {banner, icon}: uniform_tiles draws the icon, so an app's banner is never loaded (a module card keeps
+     * its banner); the icon is only loaded when there is no banner, so a tile with one skips decoding it.
+     */
+    private Drawable[] art(PackageManager pm, ResolveInfo ri, String pkg, boolean card) {
+        Drawable banner = null;
+        if (!(uniformTiles && !card)) {
+            banner = bundledBanner(appBanners.get(pkg));
+            if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
+        }
+        return new Drawable[]{banner, banner == null ? ri.loadIcon(pm) : null};
+    }
+
+    /** A folder's apps with their artwork, for the open folder; let go of when it closes. */
+    List<Entry> openFolder(Entry folder) {
+        PackageManager pm = ctx.getPackageManager();
+        List<Entry> out = new ArrayList<>();
+        for (Entry m : folder.members) {
+            Drawable[] art = m.source != null ? art(pm, m.source, m.pkg, false) : new Drawable[]{null, null};
+            out.add(new Entry(m.label, m.component, art[0], art[1]));
+        }
+        return out;
+    }
+
+    /**
+     * A folder's tile, drawn once per reload: a 5:3 glass card (white 18%) with a 3x2 grid of its first apps in
+     * miniature, each banner cropped to 5:3 or icon on a dark card, rounded. 375x225, a tile's size and a half, so the
+     * zoom stays sharp.
+     */
+    private Drawable folderArt(List<Entry> closed) {
+        // Only the apps the mini grid shows are loaded, and only while it is drawn.
+        Entry stub = new Entry(Entry.FOLDER, "", new ComponentName(ctx, "folder-preview"), null, null, null, 0);
+        stub.members = closed.subList(0, Math.min(closed.size(), Folders.PREVIEW_COLUMNS * Folders.PREVIEW_ROWS));
+        List<Entry> members = openFolder(stub);
+        int w = 375, h = 225;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+        canvas.drawColor(0x2EFFFFFF);
+        int cols = Folders.PREVIEW_COLUMNS, rows = Folders.PREVIEW_ROWS;
+        float mw = 84, mh = 50.4f, gap = 12;
+        float left = (w - cols * mw - (cols - 1) * gap) / 2f, top = (h - rows * mh - (rows - 1) * gap) / 2f;
+        android.graphics.Paint dark = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        dark.setColor(0xFF2C2C2E);
+        android.graphics.Path clip = new android.graphics.Path();
+        Rect saved = new Rect();
+        for (int i = 0; i < Math.min(members.size(), cols * rows); i++) {
+            Entry e = members.get(i);
+            float x = left + (i % cols) * (mw + gap), y = top + (i / cols) * (mh + gap);
+            android.graphics.RectF box = new android.graphics.RectF(x, y, x + mw, y + mh);
+            clip.reset();
+            clip.addRoundRect(box, 8, 8, android.graphics.Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(clip);
+            Drawable d = e.banner != null ? e.banner : e.icon;
+            if (e.banner == null) canvas.drawRect(box, dark);
+            if (d != null) {
+                d.copyBounds(saved);
+                int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
+                if (e.banner != null && iw > 0 && ih > 0) {
+                    // centerCrop: the scale that fills the box, centred.
+                    float scale = Math.max(mw / iw, mh / ih);
+                    float dw = iw * scale, dh = ih * scale;
+                    d.setBounds(Math.round(x + (mw - dw) / 2), Math.round(y + (mh - dh) / 2),
+                            Math.round(x + (mw + dw) / 2), Math.round(y + (mh + dh) / 2));
+                } else if (e.banner != null) {
+                    d.setBounds(Math.round(x), Math.round(y), Math.round(x + mw), Math.round(y + mh));
+                } else {
+                    float side = mh * 0.7f;
+                    d.setBounds(Math.round(x + (mw - side) / 2), Math.round(y + (mh - side) / 2),
+                            Math.round(x + (mw + side) / 2), Math.round(y + (mh + side) / 2));
+                }
+                d.draw(canvas);
+                d.setBounds(saved);
+            }
+            canvas.restore();
+        }
+        return new android.graphics.drawable.BitmapDrawable(ctx.getResources(), bmp);
+    }
+
+    /** An open folder's tiles: just these entries, no library pill and no dock slots (MainActivity.showFolder). */
+    void showOnly(List<Entry> entries) {
+        showLibrary = false;
+        items.clear();
+        items.addAll(entries);
+        notifyDataSetChanged();
     }
 
     /** A banner_* drawable bundled with the launcher, or null for none or a name that is not one. */
@@ -541,8 +669,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean dockKind = DockSlots.inDockRow(dockRow, singleRow, position, dockSize);
         h.name.setVisibility(dockKind && restNameAlpha == 0f && !appleTv ? View.INVISIBLE : View.VISIBLE);
         h.inDock = dockKind;
+        // A folder keeps its name under it at rest too, as tvOS shows a folder's.
+        h.folder = e.kind == Entry.FOLDER;
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
-        h.name.setAlpha(focused ? 1f : restNameAlpha);
+        h.name.setAlpha(focused ? 1f : h.restAlpha());
         h.card.setScaleX(focused && animations ? focusScale() : 1f);
         h.card.setScaleY(focused && animations ? focusScale() : 1f);
         boolean lift = focused && advancedEffects && !appleTv;
@@ -553,7 +683,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         h.gloss(focused);
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
-        h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+        h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE || e.kind == Entry.FOLDER
+                ? null : h.cardBackground);
         if (uniformTiles && e.banner == null) {
             if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
             h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
@@ -571,8 +702,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             h.label.setText(e.label);
             h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
         }
-        h.card.setOnClickListener(v -> launch(e));
+        h.card.setOnClickListener(v -> {
+            if (e.kind == Entry.FOLDER) listener.onOpenFolder(e);
+            else launch(e);
+        });
         h.card.setOnLongClickListener(v -> {
+            if (e.kind == Entry.FOLDER) return true;   // no menu and no App info for a folder
             if (tileMenu) {
                 int pos = h.getBindingAdapterPosition();
                 if (pos != RecyclerView.NO_POSITION) listener.onTileLongPress(pos, v);
@@ -637,7 +772,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @Override public int getItemViewType(int position) { return isLibraryAt(position) ? 1 : 0; }
 
     boolean containsPackage(String pkg) {
-        for (Entry entry : items) if (entry.pkg.equals(pkg)) return true;
+        for (Entry entry : items) {
+            if (entry.pkg.equals(pkg)) return true;
+            if (entry.members != null) for (Entry m : entry.members) if (m.pkg.equals(pkg)) return true;
+        }
         return false;
     }
 
@@ -983,6 +1121,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final boolean overshoot;
         /** A dock tile: it grows in place without advanced_effects' lift, which reads as off-centre in the band (#2135). */
         boolean inDock;
+        /** A folder tile: its name stays shown at rest. */
+        boolean folder;
+
+        float restAlpha() {
+            return folder ? Math.max(0.85f, restNameAlpha) : restNameAlpha;
+        }
         /** appletv_home: 1.14 zoom in 180 ms, no lift, the gloss and rim, and a press that dips the tile. */
         final boolean appleTv;
 
@@ -1040,7 +1184,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     view.animate().scaleX(s).scaleY(s).translationY(0f).translationZ(0f)
                             .setDuration(reducedMotion ? Motion.REDUCED_MS : 180)
                             .setInterpolator(new DecelerateInterpolator()).start();
-                    name.setAlpha(focused ? 1f : restNameAlpha);
+                    name.setAlpha(focused ? 1f : restAlpha());
                     name.setTranslationY(focused ? density * 4f : 0f);
                 } else if (!animations) {
                     view.setScaleX(1f);
@@ -1049,7 +1193,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     view.setTranslationZ(0f);
                     banner.setScaleX(1f);
                     banner.setScaleY(1f);
-                    name.setAlpha(focused ? 1f : restNameAlpha);
+                    name.setAlpha(focused ? 1f : restAlpha());
                     name.setTranslationY(0f);
                 } else if (reducedMotion) {
                     // A short zoom with no hardware layer: building a layer for so short an animation costs more
@@ -1060,7 +1204,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             .setDuration(focused ? Motion.REDUCED_MS : 60)
                             .setInterpolator(new DecelerateInterpolator())
                             .start();
-                    name.setAlpha(focused ? 1f : restNameAlpha);
+                    name.setAlpha(focused ? 1f : restAlpha());
                     // Same place as the full motion's slide ends: the layout's -6dp is only its starting point, and
                     // left there the name overlaps the zoomed tile.
                     // Only on focus: snapping it back to -6dp while it fades out would jump it up over the tile.
@@ -1077,7 +1221,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         banner.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
                                 .setDuration(280).start();
                     }
-                    name.animate().alpha(focused ? 1f : restNameAlpha)
+                    name.animate().alpha(focused ? 1f : restAlpha())
                             .translationY(focused ? density * 4f : -density * 6f)
                             .setDuration(220).start();
                 }

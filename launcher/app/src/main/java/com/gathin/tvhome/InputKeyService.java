@@ -31,10 +31,24 @@ public class InputKeyService extends AccessibilityService {
     private boolean consumeVolumeKeys;
     /** Stops key filtering while a game controller is connected; null unless gamepad_passthrough and key_filter. */
     private GamepadPassthrough gamepads;
+    /** The bound helper, for appletv_control_center's Standby and sleep timer; null while it is off. */
+    private static InputKeyService running;
+
+    static boolean isRunning() {
+        return running != null;
+    }
+
+    /** Android's "lock screen" action, which puts a TV to sleep (Android 9 and later); false without the helper. */
+    static boolean lockScreen() {
+        InputKeyService service = running;
+        return service != null && android.os.Build.VERSION.SDK_INT >= 28
+                && service.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+    }
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        running = this;
         // From config.xml or a theme's config.json; theme.sh rebinds this service after a push.
         Config config = Config.load(this);
         // restore_key_services: note that this helper runs, so Home can put it back after a force stop.
@@ -88,6 +102,7 @@ public class InputKeyService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        if (running == this) running = null;
         RemoteKeys.release(this);
         if (gamepads != null) gamepads.stop();
         if (consumeVolumeKeys) VolumeKeys.stop();
