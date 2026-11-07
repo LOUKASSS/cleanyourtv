@@ -190,6 +190,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final float restNameAlpha;
     /** cinematic_home: only then does a launch record the last-opened app the shelf uses. */
     private final boolean cinematic;
+    /** appletv_home: fixed 5:3 tiles with a gloss and a 1.14 zoom, and the focused tile's name under the dock too. */
+    private final boolean appleTv;
     /** Dock order (config.xml dock_apps, or a theme's config.json). */
     private final List<String> favourites;
     /** Grid apps fill the dock slots dock_apps leaves free (config.xml, fill_dock). */
@@ -242,6 +244,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.singleRow = cfg.singleRow;
         this.restNameAlpha = cfg.alwaysShowNames ? 0.75f : 0f;
         this.cinematic = cfg.cinematicHome;
+        this.appleTv = cfg.appleTvHome;
         this.launchActions = cfg.launchActions;
         this.iconTiles = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.icon_tiles)));
         this.tileMenu = cfg.tileMenu;
@@ -416,6 +419,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+        if (appleTv) {
+            w = Math.round(AppleTv.TILE_W * density);
+            h = Math.round(AppleTv.TILE_H * density);
+        }
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
@@ -430,6 +437,20 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             nameLp.height = Math.round(20 * density);
             int pad = Math.round(4 * density);
             v.setPadding(v.getPaddingLeft(), pad, v.getPaddingRight(), pad);
+        }
+        if (appleTv) {
+            // A 115dp row: 4dp above and below, the tile, an 8dp gap and a 24dp name in the system font's semibold.
+            int pad = Math.round(AppleTv.ITEM_PAD * density);
+            v.setPadding(v.getPaddingLeft(), pad, v.getPaddingRight(), pad);
+            nameLp.topMargin = h + Math.round(AppleTv.NAME_GAP * density);
+            nameLp.height = Math.round(AppleTv.NAME_H * density);
+            nameLp.width = Math.round(w * AppleTv.FOCUS_SCALE);
+            TextView label = (TextView) name;
+            label.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+            label.setTextColor(Color.WHITE);
+            label.setLetterSpacing(0f);
+            label.setShadowLayer(4 * density, 0, density, 0x80000000);
+            card.setForeground(glossFor(w, density));
         }
         name.setLayoutParams(nameLp);
         // A sideways row would stretch a match_parent item across the whole screen: give it a grid column's width.
@@ -452,8 +473,27 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View label = v.findViewById(R.id.label);
             label.setPadding(label.getPaddingLeft(), label.getPaddingTop(), label.getPaddingRight(), Math.round(4f * density));
         }
-        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
+        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot, appleTv);
     }
+
+    /**
+     * appletv_home's tile foreground: a gloss from the top-left corner, white fading out by the middle of the
+     * diagonal, 14% strong at rest and 30% on the focused tile, plus a 1dp white rim shown on focus.
+     */
+    private Drawable glossFor(int w, float density) {
+        GradientDrawable sheen = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFFFFFFFF, 0x00FFFFFF, 0x00FFFFFF});
+        sheen.setAlpha(GLOSS_REST);
+        GradientDrawable rim = new GradientDrawable();
+        rim.setCornerRadius(tileRadius(w, density));
+        // Centred on the edge, which the card clips: 2dp wide leaves the 1dp inner rim.
+        rim.setStroke(Math.round(2 * density), 0x8CFFFFFF);
+        rim.setAlpha(0);
+        return new android.graphics.drawable.LayerDrawable(new Drawable[]{sheen, rim});
+    }
+
+    /** appletv_home's gloss strength at rest and on the focused tile (0 to 255). */
+    static final int GLOSS_REST = 36, GLOSS_FOCUSED = 77;
 
     @Override
     @SuppressWarnings("deprecation")
@@ -478,16 +518,18 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
         // In a single row every tile is the dock's kind: the big title above names it.
         boolean dockKind = DockSlots.inDockRow(dockRow, singleRow, position, dockSize);
-        h.name.setVisibility(dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
+        h.name.setVisibility(dockKind && restNameAlpha == 0f && !appleTv ? View.INVISIBLE : View.VISIBLE);
         h.inDock = dockKind;
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
         h.name.setAlpha(focused ? 1f : restNameAlpha);
         h.card.setScaleX(focused && animations ? focusScale() : 1f);
         h.card.setScaleY(focused && animations ? focusScale() : 1f);
-        h.card.setTranslationY(focused && advancedEffects && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
-        h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
+        boolean lift = focused && advancedEffects && !appleTv;
+        h.card.setTranslationY(lift && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
+        h.card.setTranslationZ(lift ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
+        h.banner.setScaleX(lift ? 1.035f : 1f);
+        h.banner.setScaleY(lift ? 1.035f : 1f);
+        h.gloss(focused);
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
@@ -676,7 +718,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     float focusScale() {
-        return !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+        return !animations ? 1f : appleTv ? AppleTv.FOCUS_SCALE : advancedEffects ? 1.12f : 1.10f;
+    }
+
+    /** The tile's corner radius: appletv_home's fixed 12dp, or cornerRadius. */
+    float tileRadius(int tileWidthPx, float density) {
+        return appleTv ? 12f * density : cornerRadius(tileWidthPx, density);
     }
 
     /** A vivid colour sampled from the app's banner (or icon), cached per entry; a card's accent when it set one. */
@@ -915,9 +962,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final boolean overshoot;
         /** A dock tile: it grows in place without advanced_effects' lift, which reads as off-centre in the band (#2135). */
         boolean inDock;
+        /** appletv_home: 1.14 zoom in 180 ms, no lift, the gloss and rim, and a press that dips the tile. */
+        final boolean appleTv;
 
         Holder(View v, TileListener listener, boolean animations, boolean advancedEffects,
-               boolean reducedMotion, float restNameAlpha, boolean overshoot) {
+               boolean reducedMotion, float restNameAlpha, boolean overshoot, boolean appleTv) {
             super(v);
             card = v.findViewById(R.id.card);
             cardBackground = card.getBackground();
@@ -930,18 +979,27 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.reducedMotion = reducedMotion;
             this.restNameAlpha = restNameAlpha;
             this.overshoot = overshoot;
+            this.appleTv = appleTv;
 
             final float density = v.getResources().getDisplayMetrics().density;
             card.setOutlineProvider(new ViewOutlineProvider() {
                 @Override
                 public void getOutline(View view, Outline outline) {
                     // 16dp at the design width, scaled down with the tile so small tiles keep the same shape.
-                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerRadius(view.getWidth(), density));
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(),
+                            appleTv ? 12f * density : cornerRadius(view.getWidth(), density));
                 }
             });
             card.setClipToOutline(true);
 
             card.setOnKeyListener((view, keyCode, event) -> {
+                if (appleTv && animations && !reducedMotion && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                        || keyCode == KeyEvent.KEYCODE_ENTER) && event.getRepeatCount() == 0) {
+                    // The press: the tile dips to 95% of its zoom for 90 ms, and comes back on release.
+                    float s = AppleTv.FOCUS_SCALE * (event.getAction() == KeyEvent.ACTION_DOWN ? 0.95f : 1f);
+                    view.animate().scaleX(s).scaleY(s).setDuration(90).start();
+                    return false;
+                }
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN
                         && keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
@@ -953,9 +1011,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 view.animate().cancel();
                 banner.animate().cancel();
                 name.animate().cancel();
-                float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+                float scale = !animations ? 1f : appleTv ? AppleTv.FOCUS_SCALE : advancedEffects ? 1.12f : 1.10f;
                 float s = focused ? scale : 1f;
-                if (!animations) {
+                gloss(focused);
+                if (appleTv && animations) {
+                    // tvOS: a plain 1.14 zoom, eased out; the shadow under it is the glass in its shadow mode.
+                    view.animate().scaleX(s).scaleY(s).translationY(0f).translationZ(0f)
+                            .setDuration(reducedMotion ? Motion.REDUCED_MS : 180)
+                            .setInterpolator(new DecelerateInterpolator()).start();
+                    name.setAlpha(focused ? 1f : restNameAlpha);
+                    name.setTranslationY(focused ? density * 4f : 0f);
+                } else if (!animations) {
                     view.setScaleX(1f);
                     view.setScaleY(1f);
                     view.setTranslationY(0f);
@@ -999,6 +1065,14 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     listener.onTileFocused(pos, view);
                 }
             });
+        }
+
+        /** appletv_home: the gloss strong and the rim on for the focused tile; nothing to do in other modes. */
+        void gloss(boolean focused) {
+            if (!appleTv || !(card.getForeground() instanceof android.graphics.drawable.LayerDrawable)) return;
+            android.graphics.drawable.LayerDrawable layers = (android.graphics.drawable.LayerDrawable) card.getForeground();
+            layers.getDrawable(0).setAlpha(focused ? GLOSS_FOCUSED : GLOSS_REST);
+            layers.getDrawable(1).setAlpha(focused ? 255 : 0);
         }
     }
 }

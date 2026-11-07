@@ -128,6 +128,12 @@ final class WallpaperPlayer {
         }
     }
 
+    /** The picture on screen, or null when there is none (appletv_home blurs it for the grid). */
+    File shown() {
+        for (File file : files) if (file.getName().equals(displayed)) return file;
+        return null;
+    }
+
     void start() {
         active = true;
         update();

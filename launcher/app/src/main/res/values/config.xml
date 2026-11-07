@@ -498,6 +498,13 @@
          theme's wallpaper show through. A theme can set "cinematic_scrim" and "cinematic_art". -->
     <integer name="cinematic_scrim">100</integer>
     <integer name="cinematic_art">50</integer>
+    <!-- Apple TV style Home, built on the cinematic shelf: the theme's wallpaper fills the screen sharp behind a
+         light scrim, the focused dock app's name sits large at the top left, the dock is a row of 5:3 tiles with no
+         band, a glass capsule with the time and the greeting_name initial sits top right (OK opens the menu with
+         Inputs, Network and Settings), and scrolling into the grid swaps the wallpaper for a blurred, darker copy.
+         Turns on cinematic_home and dock_row and leaves out the header, the pills and the coloured glow. false
+         keeps Home as it is. Can also be set with "appletv_home": true in a theme's config.json. -->
+    <bool name="appletv_home">false</bool>
 
     <!-- The glow behind the dock in the focused app's colour (red for YouTube, blue for Prime Video). false keeps
          only background_color or the wallpaper behind everything. Can also be set with "ambient_glow": false in a

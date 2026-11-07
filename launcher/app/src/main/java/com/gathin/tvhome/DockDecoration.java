@@ -29,7 +29,9 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
     /** The band's top and bottom the glass gradient was made for; it is remade when they move. */
     private float shaderTop = Float.NaN, shaderBottom = Float.NaN;
     /** Draw the band and its edge (config.xml dock_band); false leaves the tiles floating on the wallpaper. */
-    private final boolean bandVisible;
+    private boolean bandVisible;
+    /** Room above and below the dock row, in dp: 6 and 12, or appletv_home's 0 and 8 (see appleTv()). */
+    private int topDp = 6, bottomDp = 12;
     /** single_row: the tiles after the dock share its row, so they take the same offsets to stay level with it. */
     private final boolean singleRow;
     /** dock_band_all: in a single row, the band runs behind every app instead of the dock apps only. */
@@ -75,13 +77,26 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         return Math.max(0f, Math.min(gap, roomPx));
     }
 
+    /** appletv_home: no band, the dock's tiles on the padding line and the next row close under it. */
+    DockDecoration appleTv() {
+        bandVisible = false;
+        topDp = 0;
+        bottomDp = AppleTv.DOCK_BOTTOM;
+        return this;
+    }
+
+    /** The room above the dock row, which MainActivity takes off when it parks the row on the padding line. */
+    int topPx() {
+        return (int) (topDp * density);
+    }
+
     @Override
     public void getItemOffsets(@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent,
                                @NonNull RecyclerView.State state) {
         int pos = parent.getChildAdapterPosition(view);
         if (pos >= 0 && (singleRow || pos < dockSize)) {
-            outRect.top = (int) (6 * density);
-            outRect.bottom = (int) (12 * density);
+            outRect.top = (int) (topDp * density);
+            outRect.bottom = (int) (bottomDp * density);
         }
     }
 

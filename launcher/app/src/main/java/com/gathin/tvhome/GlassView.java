@@ -1,6 +1,7 @@
 package com.gathin.tvhome;
 
 import android.content.Context;
+import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
@@ -29,6 +30,8 @@ public class GlassView extends View {
     /** glass_style rim or halo: no sheen and no fill, only the crisp rim (and, for halo, a lighter outer glow). */
     private boolean flat;
     private boolean halo;
+    /** appletv_home: a soft drop shadow under the focused tile instead of the glass, drawn below the grid. */
+    private boolean shadow;
 
     public GlassView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -69,6 +72,17 @@ public class GlassView extends View {
         invalidate();
     }
 
+    /**
+     * appletv_home: the view becomes the focused tile's shadow, 17dp down and blurred over about 30dp, black at 55%.
+     * The blur is drawn in software once per size; the springs only move the cached layer.
+     */
+    void setShadow() {
+        shadow = true;
+        fill.setColor(0x8C000000);
+        fill.setMaskFilter(new BlurMaskFilter(26f * density, BlurMaskFilter.Blur.NORMAL));
+        setLayerType(LAYER_TYPE_SOFTWARE, null);
+    }
+
     void setRadius(float px) {
         radius = px;
         invalidate();
@@ -77,12 +91,19 @@ public class GlassView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        if (shadow) return;
         fill.setShader(new LinearGradient(0, 0, 0, h, 0x3DFFFFFF, 0x12FFFFFF, Shader.TileMode.CLAMP));
         specular.setShader(new LinearGradient(0, 0, 0, h * 0.45f, 0x66FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
+        if (shadow) {
+            float inset = AppleTv.SHADOW_PAD * density;
+            rect.set(inset, inset + 17f * density, getWidth() - inset, getHeight() - inset + 17f * density);
+            canvas.drawRoundRect(rect, radius, radius, fill);
+            return;
+        }
         float inset = 6f * density;   // room for the glow
         rect.set(inset, inset, getWidth() - inset, getHeight() - inset);
 

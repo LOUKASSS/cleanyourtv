@@ -419,6 +419,51 @@
         </FrameLayout>
     </LinearLayout>
 
+    <!-- appletv_home only: the glass capsule top right, the time and the greeting_name initial. OK opens the menu
+         with Inputs, Network and Settings (MainActivity.setUpAppleTv). -->
+    <LinearLayout
+        android:id="@+id/appleStatus"
+        android:layout_width="107dp"
+        android:layout_height="32dp"
+        android:layout_gravity="top|right"
+        android:layout_marginTop="26dp"
+        android:layout_marginRight="40dp"
+        android:paddingLeft="13dp"
+        android:paddingRight="4dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:focusable="true"
+        android:clickable="true"
+        android:nextFocusLeft="@id/appleStatus"
+        android:nextFocusRight="@id/appleStatus"
+        android:contentDescription="@string/settings"
+        android:visibility="gone">
+
+        <TextClock
+            android:id="@+id/appleTime"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:format12Hour="h:mm"
+            android:format24Hour="HH:mm"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif-medium"
+            android:includeFontPadding="false" />
+
+        <TextView
+            android:id="@+id/appleAvatar"
+            android:layout_width="23dp"
+            android:layout_height="23dp"
+            android:gravity="center"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif"
+            android:includeFontPadding="false" />
+    </LinearLayout>
+
     <!-- The single floating glass highlight that springs between tiles. -->
     <com.gathin.tvhome.GlassView
         android:id="@+id/glass"

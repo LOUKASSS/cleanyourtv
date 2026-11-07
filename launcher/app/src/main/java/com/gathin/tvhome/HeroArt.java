@@ -41,10 +41,7 @@ final class HeroArt {
         small.getPixels(px, 0, W, 0, 0, W, H);
         saturate(px);
         // Three box passes approximate a gaussian, so the stretched image shows no seams between pixels.
-        for (int pass = 0; pass < 3; pass++) {
-            px = boxBlur(px, W, H, 2, true);
-            px = boxBlur(px, W, H, 2, false);
-        }
+        AppleTv.blur(px, W, H, 2, 3);
         Bitmap out = small.isMutable() ? small : small.copy(Bitmap.Config.ARGB_8888, true);
         if (out != small) small.recycle();
         out.setPixels(px, 0, W, 0, 0, W, H);
@@ -63,25 +60,5 @@ final class HeroArt {
 
     private static int clamp(float v) {
         return v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
-    }
-
-    /** One box blur pass along rows (horizontal) or columns, edges clamped. */
-    private static int[] boxBlur(int[] src, int w, int h, int radius, boolean horizontal) {
-        int[] dst = new int[src.length];
-        int lines = horizontal ? h : w, length = horizontal ? w : h, span = 2 * radius + 1;
-        for (int line = 0; line < lines; line++) {
-            for (int i = 0; i < length; i++) {
-                int r = 0, g = 0, b = 0;
-                for (int k = -radius; k <= radius; k++) {
-                    int j = Math.max(0, Math.min(length - 1, i + k));
-                    int p = horizontal ? src[line * w + j] : src[j * w + line];
-                    r += Color.red(p);
-                    g += Color.green(p);
-                    b += Color.blue(p);
-                }
-                dst[horizontal ? line * w + i : i * w + line] = Color.rgb(r / span, g / span, b / span);
-            }
-        }
-        return dst;
     }
 }

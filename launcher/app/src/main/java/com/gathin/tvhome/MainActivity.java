@@ -174,6 +174,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private String heroArtKey;
     /** The focus glow's colour while the cinematic shelf tints it, 0 for plain white glass. */
     private int glassAccent;
+    /** config.xml appletv_home: the Apple TV look on top of the cinematic shelf (setUpAppleTv). */
+    private boolean appleTv;
+    /** appletv_home: focus is below the dock, so the grid is lifted over the blurred backdrop. */
+    private boolean appleInGrid;
+    /** appletv_home: the status capsule, the wallpaper's blurred copy behind the grid and the scrim over the photo. */
+    private View appleStatus, heroScrim;
+    private ImageView appleBlur;
+    /** The wallpaper appleBlur was made from, and whether a blur is being made now. */
+    private File appleBlurFrom;
+    private boolean appleBlurring;
+    /** The dock's decoration, whose room above the row onTileFocused takes off when it parks the dock. */
+    private DockDecoration dockDecoration;
     private int ambientColor = -1;
     private ValueAnimator ambientAnimator;
     /** config.xml glow_snap: the glow takes a new colour in one frame instead of the dip-and-fade. */
@@ -534,6 +546,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroDotsShown = cfg.cinematicDots;
         cinematicWhiteFocus = cfg.cinematicWhiteFocus;
         heroArtAlpha = cfg.cinematicArt / 100f;
+        appleTv = cfg.appleTvHome;
+        // appletv_home keeps the theme's photo sharp: no app artwork over it.
+        if (appleTv) heroArtAlpha = 0f;
         if (cinematic) setUpCinematicShelf(cfg.cinematicScrim);
         // dock_title false: the name above the dock (and the cinematic lines under it) never shows; the glow
         // still follows the dock.
@@ -650,6 +665,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     return true;
                 }
                 if (dockRow && getPosition(child) < COLUMNS) return false;
+                // appletv_home places every row itself (onTileFocused), the way tvOS lifts the grid.
+                if (appleTv) return false;
                 int top = child.getTop() + rect.top;
                 int bottom = top + rect.height();
                 // A row already fully on screen stays put, even inside the bottom padding (the last row
@@ -683,8 +700,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             public void onChildViewDetachedFromWindow(@NonNull View v) {
             }
         });
-        if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
-                singleRow, cfg.dockBandAll));
+        if (dockRow) {
+            dockDecoration = new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
+                    singleRow, cfg.dockBandAll);
+            if (appleTv) dockDecoration.appleTv();
+            grid.addItemDecoration(dockDecoration);
+        }
         if (cfg.fadeRows) TopFade.attach(grid, 48 * density);
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
@@ -721,6 +742,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // A single row never shows the names under its tiles (the title above the row names the app), so the
             // 7dp gap and 22dp label item_app.xml keeps for them would only lift the row: sit it that much lower.
             if (singleRow && !cfg.alwaysShowNames) want += (int) (29 * density);
+            // appletv_home: the dock's tiles at a fixed 400dp, on a grid that fills the screen.
+            if (appleTv) want = (int) ((AppleTv.DOCK_TOP - AppleTv.ITEM_PAD) * density);
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
                 // A vertical grid parks the dock on the new padding line by scrolling (onTileFocused); a sideways
@@ -927,6 +950,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
 
+        if (appleTv) {
+            setUpAppleTv(cfg);
+            // The pills' keys: Down to the dock tile Up came from, Up kept here; Left and Right stay (layout).
+            appleStatus.setOnKeyListener(pillKeys);
+        }
+
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
@@ -992,7 +1021,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean openInputsIfAsked(Intent intent) {
         if (intent == null || !ACTION_VIEW_INPUTS.equals(intent.getAction())) return false;
         setIntent(new Intent(Intent.ACTION_MAIN));
-        View anchor = topMenu ? findViewById(R.id.btnSettings) : btnInputs;
+        View anchor = appleTv ? appleStatus : topMenu ? findViewById(R.id.btnSettings) : btnInputs;
         if (anchor.getVisibility() != View.VISIBLE) return true;
         if (anchor.isLaidOut()) {
             // Android 9 delivers a new intent to a paused activity with a brief resume and pause around it, and
@@ -1355,6 +1384,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.getRecycledViewPool().clear();
         heroArtCache.clear();
         heroArtKey = null;
+        releaseAppleBlur();
         wallpaperPlayer.releaseForMemoryPressure();
         tileRefresh.invalidate();
     }
@@ -1648,6 +1678,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return pos != RecyclerView.NO_POSITION && movingKey.equals(adapter.keyAt(pos)) ? 1f : 0.45f;
         }
         if (dockEditSlot >= 0 && pos >= 0 && pos < COLUMNS && pos != dockEditSlot) return 0.45f;
+        // appletv_home: on the dock, the rows below peek dimmed at the bottom edge.
+        if (appleTv && !appleInGrid && pos >= COLUMNS) return AppleTv.PEEK_ALPHA;
         return 1f;
     }
 
@@ -1757,6 +1789,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
+        // appletv_home: Back in the grid goes up to the dock, in the same column, as on tvOS.
+        if (appleInGrid) {
+            focusTile(lastFocused % COLUMNS);
+            return;
+        }
         // Home screen: Back goes nowhere, unless back_opens_clock is on.
         if (backOpensClock) startActivity(new Intent(this, ClockActivity.class));
     }
@@ -1810,13 +1847,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Rect r = tileRect;
         r.set(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
-        float pad = 6f * density;        // matches GlassView's glow inset
+        float pad = glassPad();        // matches GlassView's glow inset (or its shadow's room)
         float scale = adapter.focusScale();
         float w = card.getWidth() * scale + 2 * pad;
         float h = card.getHeight() * scale + 2 * pad;
         float x = r.exactCenterX() - w / 2f;
         // advanced_effects lifts a focused grid tile by 4dp and the glass follows it; dock tiles stay put (#2135).
-        boolean lifted = advancedEffects && !DockSlots.inDockRow(dockRow, singleRow, position, COLUMNS);
+        boolean lifted = advancedEffects && !appleTv && !DockSlots.inDockRow(dockRow, singleRow, position, COLUMNS);
         float y = r.exactCenterY() - h / 2f - (lifted ? 4f * density : 0f);
 
         ViewGroup.LayoutParams lp = glass.getLayoutParams();
@@ -1825,7 +1862,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             lp.height = (int) h;
             glass.setLayoutParams(lp);
             // GlassView draws its slab inset by pad, i.e. exactly over the zoomed tile: same corners as the tile.
-            glass.setRadius(AppAdapter.cornerRadius(card.getWidth(), density) * scale);
+            glass.setRadius(adapter.tileRadius(card.getWidth(), density) * scale);
         }
         glassCardW = card.getWidth();
         glassCardRect.set(r);
@@ -1833,7 +1870,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glassTargetY = y;
         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid (and on the dock with
         // cinematic_white_focus). app_glow: every tile. In a single row every tile is the dock's kind.
-        boolean coloured = (appGlow || cinematic && !cinematicWhiteFocus && (singleRow || position < COLUMNS)) && !festive;
+        boolean coloured = (appGlow || cinematic && !cinematicWhiteFocus && (singleRow || position < COLUMNS)) && !festive && !appleTv;
         int accent = coloured ? adapter.ambientColorAt(position) : 0;
         if ((cinematic || appGlow) && !festive && accent != glassAccent) {
             glassAccent = accent;
@@ -1860,7 +1897,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (dockRow && (singleRow || position < COLUMNS)) {
             // Dock: park it at the bottom of the screen and show the top shelf for this app. In a single row
             // every tile is in the dock's row, which never scrolls vertically.
-            int decoratedTop = item.getTop() - (int) (6 * density);
+            int decoratedTop = item.getTop() - dockDecoration.topPx();
+            if (appleTv) appleGrid(false);
             int dy = decoratedTop - grid.getPaddingTop();
             // A 1px mismatch used to start a scroll on every dock move. Only scroll when the row is
             // actually off; reduced motion does it in one jump so it does not fight the highlight.
@@ -1870,6 +1908,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 else grid.smoothScrollBy(0, dy);
             }
             showHero(position, scroll ? r.top - dy : r.top);
+        } else if (appleTv) {
+            appleGrid(true);
+            placeAppleRow(position, item.getTop() + card.getTop());
         } else {
             // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
             // fade out left the grid on plain black.
@@ -1887,7 +1928,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
         View card = vh == null ? null : vh.itemView.findViewById(R.id.card);
         if (card == null || card.getWidth() <= 0 || !card.isFocused()) return;
-        float pad = 6f * density;
+        float pad = glassPad();
         float scale = adapter.focusScale();
         int w = (int) (card.getWidth() * scale + 2 * pad);
         int h = (int) (card.getHeight() * scale + 2 * pad);
@@ -1907,7 +1948,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showHero(int position, float dockTopInRoot) {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
-        float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
+        float y = appleTv ? AppleTv.SHELF_TOP * density : dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
         if (cinematic && heroArtAlpha > 0f) showHeroArt(position);
 
@@ -1942,12 +1983,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             heroShown = true;
         } else if (changed) {
-            if (advancedEffects) hero.animate().cancel();
-            hero.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+            if (advancedEffects || appleTv) hero.animate().cancel();
+            // appletv_home: a plain cross-fade of 80 + 100 ms, no slide.
+            float slide = appleTv ? 0f : 12 * density;
+            hero.animate().alpha(0f).translationX(-slide).setDuration(appleTv ? 80 : 120).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
-                hero.setTranslationX(12 * density);
-                hero.animate().alpha(1f).translationX(0f).setDuration(200).start();
+                hero.setTranslationX(slide);
+                hero.animate().alpha(1f).translationX(0f).setDuration(appleTv ? 100 : 200).start();
             }).start();
             if (ambientGlow && advancedEffects) {
                 transitionAmbient(color);
@@ -1994,9 +2037,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroArt.setVisibility(heroArtAlpha > 0f ? View.VISIBLE : View.GONE);
         // One stretched bitmap: apply its alpha while drawing instead of through an offscreen buffer.
         heroArt.forceHasOverlappingRendering(false);
-        if (scrimPercent <= 0) return;   // cinematic_scrim 0: no scrim at all
+        // cinematic_scrim 0: no scrim at all; appletv_home brings its own (setUpAppleTv).
+        if (scrimPercent <= 0 || appleTv) return;
         View scrim = findViewById(R.id.heroScrim);
-        Drawable shade = scrimDrawable();
+        Drawable shade = scrimDrawable(new int[]{0xD1060406, 0x59060406, 0x00060406}, new float[]{0f, 0.42f, 0.7f},
+                new int[]{0x00060406, 0x00060406, 0xDB060406, 0xFF060406}, new float[]{0f, 0.28f, 0.58f, 0.76f});
         // On the bitmap's paint, not the view: a view's alpha would draw the full screen through an offscreen buffer.
         shade.setAlpha(scrimPercent * 255 / 100);
         scrim.setBackground(shade);
@@ -2006,23 +2051,232 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /**
      * Darkens the side the shelf's text is on and the lower part of the screen, so the name, the dock and
      * the grid stay readable over the artwork. One small bitmap stretched over the screen, like the glow.
+     * side runs from the text's edge across, bottom from the top down, each with its stops.
      */
-    private Drawable scrimDrawable() {
+    private Drawable scrimDrawable(int[] side, float[] sideStops, int[] bottom, float[] bottomStops) {
         int w = 480, h = 270;
         Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bmp);
         boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
         Paint paint = new Paint();
         paint.setShader(new LinearGradient(rtl ? w : 0, 0, rtl ? 0 : w, 0,
-                new int[]{0xD1060406, 0x59060406, 0x00060406}, new float[]{0f, 0.42f, 0.7f}, Shader.TileMode.CLAMP));
+                side, sideStops, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, w, h, paint);
-        paint.setShader(new LinearGradient(0, 0, 0, h,
-                new int[]{0x00060406, 0x00060406, 0xDB060406, 0xFF060406}, new float[]{0f, 0.28f, 0.58f, 0.76f},
-                Shader.TileMode.CLAMP));
+        paint.setShader(new LinearGradient(0, 0, 0, h, bottom, bottomStops, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, w, h, paint);
         BitmapDrawable scrim = new BitmapDrawable(getResources(), bmp);
         scrim.setGravity(Gravity.FILL);
         return scrim;
+    }
+
+    // ---- appletv_home ----------------------------------------------------------------------------
+
+    /** Room around the tile in the glass view: GlassView's glow inset, or appletv_home's shadow. */
+    private float glassPad() {
+        return (appleTv ? AppleTv.SHADOW_PAD : 6f) * density;
+    }
+
+    /**
+     * appletv_home, on top of the cinematic shelf: the header goes, the grid fills the screen with its dock at 400dp,
+     * the shelf's text moves to the top left in the system font, the photo gets its light scrim, the glass becomes
+     * the focused tile's shadow under the grid, and the status capsule takes over the pills' work.
+     */
+    private void setUpAppleTv(Config cfg) {
+        ViewGroup header = (ViewGroup) clockBlock.getParent();
+        header.setVisibility(View.GONE);
+        ViewGroup column = (ViewGroup) header.getParent();
+        column.setPadding(0, 0, 0, 0);
+        ((ViewGroup.MarginLayoutParams) ((View) grid.getParent()).getLayoutParams()).topMargin = 0;
+        int side = (int) (AppleTv.sidePadding() * density);
+        // A deep bottom padding, so even two rows can lift the dock row up to GRID_TOP.
+        grid.setPadding(side, grid.getPaddingTop(), side, (int) (320 * density));
+
+        ((FrameLayout.LayoutParams) hero.getLayoutParams()).setMarginStart((int) (AppleTv.LEFT * density));
+        LinearLayout shelf = (LinearLayout) hero;
+        // The "Last opened" line becomes the overline above the name.
+        shelf.removeView(heroMeta);
+        shelf.addView(heroMeta, 0);
+        heroMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        heroMeta.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        heroMeta.setLetterSpacing(0.12f);
+        heroMeta.setAllCaps(true);
+        heroMeta.setTextColor(0xD9FFFFFF);
+        LinearLayout.LayoutParams meta = (LinearLayout.LayoutParams) heroMeta.getLayoutParams();
+        meta.setMarginStart(0);
+        meta.topMargin = 0;
+        LinearLayout.LayoutParams name = (LinearLayout.LayoutParams) heroName.getLayoutParams();
+        name.topMargin = (int) (7 * density);
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 66f);
+        heroName.setTypeface(android.graphics.Typeface.create("sans-serif-black", android.graphics.Typeface.NORMAL));
+        heroName.setLetterSpacing(-0.045f);
+        heroName.setShadowLayer(16 * density, 0, 2 * density, 0x33000000);
+        // A long app name ends in an ellipsis before the photo's right third, as tvOS cuts a title.
+        heroName.setMaxWidth((int) (760 * density));
+        heroName.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams dots = (LinearLayout.LayoutParams) heroDots.getLayoutParams();
+        dots.height = (int) (5 * density);
+        dots.setMarginStart(0);
+        // The dots sit at DOTS_TOP whatever the name's line height: nudge their margin once the shelf is laid out.
+        hero.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int want = dots.topMargin + (int) ((AppleTv.DOTS_TOP - AppleTv.SHELF_TOP) * density) - heroDots.getTop();
+            if (want != dots.topMargin && heroDots.getTop() > 0) {
+                dots.topMargin = want;
+                heroDots.post(heroDots::requestLayout);
+            }
+        });
+
+        heroScrim = findViewById(R.id.heroScrim);
+        // The photo's scrim: black 45% on the left fading out by 57% of the width, and along the bottom none above
+        // 35%, 55% at 68% and 85% at the edge.
+        heroScrim.setBackground(scrimDrawable(new int[]{0x73000000, 0}, new float[]{0f, 0.573f},
+                new int[]{0, 0, 0x8C000000, 0xD9000000}, new float[]{0f, 0.35f, 0.68f, 1f}));
+        heroScrim.setVisibility(View.VISIBLE);
+        heroScrim.forceHasOverlappingRendering(false);
+        // The blurred photo for the grid, above the sharp one and under the scrim.
+        appleBlur = new ImageView(this);
+        appleBlur.setScaleType(ImageView.ScaleType.FIT_XY);
+        appleBlur.setAlpha(0f);
+        appleBlur.forceHasOverlappingRendering(false);
+        appleBlur.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        root.addView(appleBlur, root.indexOfChild(heroScrim), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // The glass becomes the focused tile's shadow, so it goes under the tiles.
+        glass.setShadow();
+        root.removeView(glass);
+        root.addView(glass, root.indexOfChild(column));
+
+        appleStatus = findViewById(R.id.appleStatus);
+        appleStatus.setVisibility(View.VISIBLE);
+        GradientDrawable capsule = new GradientDrawable();
+        capsule.setCornerRadius(16 * density);
+        appleStatus.setBackground(capsule);
+        TextView avatar = findViewById(R.id.appleAvatar);
+        GradientDrawable disc = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFFFF9F0A, 0xFFFF375F});
+        disc.setShape(GradientDrawable.OVAL);
+        avatar.setBackground(disc);
+        String letter = AppleTv.initial(cfg.greetingName);
+        avatar.setText(letter);
+        if (letter.isEmpty()) {
+            // No name: a person glyph, its 13dp centred in the 23dp disc (a drawable sits at the left padding).
+            avatar.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_person, 0, 0, 0);
+            avatar.setPadding((int) (5 * density), 0, 0, 0);
+        }
+        View.OnFocusChangeListener lit = (v, focused) -> {
+            // Glass at rest (white 14%, a 32% rim); focused, brighter and a little larger.
+            capsule.setColor(focused ? 0x4DFFFFFF : 0x24FFFFFF);
+            capsule.setStroke(Math.max(1, (int) density), focused ? 0xB3FFFFFF : 0x52FFFFFF);
+            float s = focused ? 1.08f : 1f;
+            if (animations) appleStatus.animate().scaleX(s).scaleY(s).setDuration(reducedMotion ? Motion.REDUCED_MS : 160).start();
+        };
+        lit.onFocusChange(appleStatus, false);
+        appleStatus.setOnFocusChangeListener(lit);
+        appleStatus.setOnClickListener(v -> showTopMenu());
+        appleStatus.setOnLongClickListener(v -> {
+            showSettingsMenu();
+            return true;
+        });
+        // Ready before the first press of Down, so the grid never waits for it.
+        makeAppleBlur();
+    }
+
+    /**
+     * Into the grid (row 2 and below) or back to the dock: the shelf's text fades, the photo swaps for its blurred,
+     * darker copy and the rows below the dock lose their dimming. Fades only; nothing is blurred per frame.
+     */
+    private void appleGrid(boolean on) {
+        if (on == appleInGrid) return;
+        appleInGrid = on;
+        int ms = !animations ? 0 : reducedMotion ? Motion.REDUCED_MS : 260;
+        if (on) {
+            hideHero();
+            makeAppleBlur();
+        }
+        appleBlur.animate().cancel();
+        appleBlur.animate().alpha(on ? 1f : 0f).setDuration(ms).start();
+        heroScrim.animate().cancel();
+        // Without the blurred copy (no wallpaper, or not made yet) the scrim stays over the sharp photo.
+        heroScrim.animate().alpha(on && appleBlur.getDrawable() != null ? 0f : 1f).setDuration(ms).start();
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View item = grid.getChildAt(i);
+            item.animate().alpha(tileAlpha(grid.getChildAdapterPosition(item))).setDuration(ms).start();
+        }
+    }
+
+    /**
+     * Scrolls the grid so the focused row sits where tvOS puts it (AppleTv.rowTop): the dock row up at GRID_TOP
+     * when first leaving it, then only as far as it takes to keep the row and its name on screen.
+     * @param top the focused tile's top in the grid now, px
+     */
+    private void placeAppleRow(int position, int top) {
+        int row = position / COLUMNS;
+        int item = Math.round((AppleTv.TILE_H + 2 * AppleTv.ITEM_PAD + AppleTv.NAME_GAP + AppleTv.NAME_H) * density);
+        int fromDock = item + (int) (AppleTv.DOCK_BOTTOM * density) + (row - 1) * item;
+        // The zoomed tile and its name: the item less its padding, with the zoom's growth below the tile.
+        int extent = item - Math.round(2 * AppleTv.ITEM_PAD * density)
+                + Math.round(AppleTv.TILE_H * (AppleTv.FOCUS_SCALE - 1f) / 2f * density);
+        int want = AppleTv.rowTop(top, fromDock, (int) (AppleTv.GRID_TOP * density),
+                grid.getHeight() - (int) (12 * density), extent);
+        int dy = top - want;
+        if (Math.abs(dy) <= 1) return;
+        if (!animations || reducedMotion) grid.scrollBy(0, dy);
+        else grid.smoothScrollBy(0, dy, new android.view.animation.DecelerateInterpolator(1.5f), 320);
+    }
+
+    /**
+     * The wallpaper on screen, blurred and darkened to BLUR_BRIGHTNESS once, off the UI thread, at BLUR_W x BLUR_H and
+     * stretched over the screen: about 230 KB, made again only when another picture is on screen.
+     */
+    private void makeAppleBlur() {
+        File file = wallpaperPlayer.shown();
+        if (file == null || appleBlurring || file.equals(appleBlurFrom) && appleBlur.getDrawable() != null) return;
+        appleBlurring = true;
+        new Thread(() -> {
+            Bitmap blurred = null;
+            try {
+                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(file.getPath(), o);
+                // Decode at no less than the blur's size, a power of two down from the file, in 16 bits: the blur
+                // hides what that loses.
+                o.inSampleSize = WallpaperSize.sampleSize(o.outWidth, o.outHeight, AppleTv.BLUR_W, AppleTv.BLUR_H);
+                o.inPreferredConfig = Bitmap.Config.RGB_565;
+                o.inJustDecodeBounds = false;
+                Bitmap photo = WallpaperSize.accepted(o.outWidth / o.inSampleSize, o.outHeight / o.inSampleSize)
+                        ? android.graphics.BitmapFactory.decodeFile(file.getPath(), o) : null;
+                if (photo != null) {
+                    int[] crop = AppleTv.centerCrop(photo.getWidth(), photo.getHeight(), AppleTv.BLUR_W, AppleTv.BLUR_H);
+                    blurred = Bitmap.createBitmap(AppleTv.BLUR_W, AppleTv.BLUR_H, Bitmap.Config.ARGB_8888);
+                    new Canvas(blurred).drawBitmap(photo, new Rect(crop[0], crop[1], crop[0] + crop[2], crop[1] + crop[3]),
+                            new Rect(0, 0, AppleTv.BLUR_W, AppleTv.BLUR_H), new Paint(Paint.FILTER_BITMAP_FLAG));
+                    photo.recycle();
+                    int[] px = new int[AppleTv.BLUR_W * AppleTv.BLUR_H];
+                    blurred.getPixels(px, 0, AppleTv.BLUR_W, 0, 0, AppleTv.BLUR_W, AppleTv.BLUR_H);
+                    // Three passes of radius 6: close to the mockup's 40px blur at this size.
+                    AppleTv.blur(px, AppleTv.BLUR_W, AppleTv.BLUR_H, 6, 3);
+                    AppleTv.darken(px, AppleTv.BLUR_BRIGHTNESS);
+                    blurred.setPixels(px, 0, AppleTv.BLUR_W, 0, 0, AppleTv.BLUR_W, AppleTv.BLUR_H);
+                }
+            } catch (Exception | OutOfMemoryError ignored) {
+                // no blurred copy: the grid stays over the photo and its scrim
+            }
+            Bitmap result = blurred;
+            handler.post(() -> {
+                appleBlurring = false;
+                if (result == null || isDestroyed()) return;
+                appleBlurFrom = file;
+                appleBlur.setImageBitmap(result);
+                if (appleInGrid) heroScrim.animate().alpha(0f).setDuration(260).start();
+            });
+        }, "appletv-blur").start();
+    }
+
+    /** Lets go of the blurred copy while memory is short; the grid makes it again when next entered. */
+    private void releaseAppleBlur() {
+        if (appleBlur == null) return;
+        // Not recycled: a queued frame may still draw it. Dropped, the GC frees it once nothing does.
+        appleBlur.setImageDrawable(null);
+        appleBlurFrom = null;
     }
 
     /** Swaps the backdrop to this app's artwork: fade out, swap, fade in, the way the shelf's name changes. */
@@ -2083,19 +2337,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             for (int i = 0; i < count; i++) {
                 View dot = new View(this);
                 GradientDrawable bg = new GradientDrawable();
-                bg.setCornerRadius(3 * density);
+                // appletv_home: 5dp dots 5dp apart, the current one a 15dp pill.
+                float dp = appleTv ? 5 : 6;
+                bg.setCornerRadius(dp / 2 * density);
                 dot.setBackground(bg);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (6 * density), (int) (6 * density));
-                if (i > 0) lp.leftMargin = (int) (6 * density);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (dp * density), (int) (dp * density));
+                if (i > 0) lp.leftMargin = (int) (dp * density);
                 heroDots.addView(dot, lp);
             }
         }
         for (int i = 0; i < count; i++) {
             View dot = heroDots.getChildAt(rtlAppGrid ? count - 1 - i : i);
             boolean on = i == position;
-            ((GradientDrawable) dot.getBackground()).setColor(on ? 0xFFFFFFFF : 0x4DFFFFFF);
+            ((GradientDrawable) dot.getBackground()).setColor(on ? 0xFFFFFFFF : appleTv ? 0x66FFFFFF : 0x4DFFFFFF);
             ViewGroup.LayoutParams lp = dot.getLayoutParams();
-            int w = (int) ((on ? 20 : 6) * density);
+            int w = (int) ((on ? appleTv ? 15 : 20 : appleTv ? 5 : 6) * density);
             if (lp.width != w) {
                 lp.width = w;
                 dot.setLayoutParams(lp);
@@ -2452,6 +2708,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            if (position < COLUMNS && appleTv) return appleStatus.requestFocus();
             if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
             target = position - COLUMNS;
         } else {
@@ -3397,8 +3654,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // top_menu: the pill is gone, so the list hangs under the gear, growing inward from the right.
         // Read the switch, not the pill: show_inputs_pill=false hides the pill too, and there the list
         // keeps its usual place.
-        boolean underGear = topMenu;
-        View anchor = findViewById(underGear ? R.id.btnSettings : R.id.btnInputs);
+        boolean underGear = topMenu || appleTv;   // appletv_home: under the status capsule, the same way
+        View anchor = appleTv ? appleStatus : findViewById(underGear ? R.id.btnSettings : R.id.btnInputs);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
 
@@ -3664,7 +3921,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** top_menu: the gear's dropdown, standing in for the Inputs, Wi-Fi and Settings pills. */
     private void showTopMenu() {
-        View anchor = findViewById(R.id.btnSettings);
+        View anchor = appleTv ? appleStatus : findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (220 * density));
@@ -3693,7 +3950,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** The header opens launcher settings directly; hold OK keeps the extra home actions available. */
     private void showSettingsMenu() {
-        View anchor = findViewById(R.id.btnSettings);
+        View anchor = appleTv ? appleStatus : findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
@@ -4005,7 +4262,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void showModuleCardsNow() {
-        View anchor = findViewById(R.id.btnSettings);
+        View anchor = appleTv ? appleStatus : findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_cards, root, false);
         if (getResources().getBoolean(R.bool.rtl_menu_bar))
             panel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
