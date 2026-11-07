@@ -178,6 +178,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean appleTv;
     /** appletv_home: focus is below the dock, so the grid is lifted over the blurred backdrop. */
     private boolean appleInGrid;
+    /** appletv_home: where the grid sits in the window, reused by fadeUnderStatus. */
+    private final int[] gridAt = new int[2];
     /** appletv_home: the status capsule, the wallpaper's blurred copy behind the grid and the scrim over the photo. */
     private View appleStatus, heroScrim;
     private ImageView appleBlur;
@@ -196,6 +198,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private android.graphics.drawable.ClipDrawable shelfBar;
     /** The dock app the shelf is on, which of its items shows, and what that app's items were when last drawn. */
     private String shelfPkg, shelfSig;
+    /** The overline's small app icons, by package: a few hundred bytes each, for the dock's apps. */
+    private final Map<String, Drawable> shelfIcons = new java.util.HashMap<>();
     private int shelfIndex;
     /** The shelf shows an item (not the app's name), so "Last opened" stays out of the overline. */
     private boolean shelfItemShown;
@@ -1852,6 +1856,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (libraryFocusPending && appLibrary == null && hasWindowFocus() && !isFinishing()) focusLibrary();
             });
         }, libraryExcludedApps);
+        if (appleTv) appLibrary.appleStyle();
         openPopup = appLibrary.popup;
         appLibrary.show();
     }
@@ -2206,8 +2211,31 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             showSettingsMenu();
             return true;
         });
+        // Rows scrolled up toward the capsule fade out (fadeUnderStatus): content stays below the status, as on tvOS.
+        // onScrolled also runs after each layout, so tiles bound later get their fade too. Transition alpha is public
+        // from Android 10; below it the rows keep scrolling under the capsule.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                fadeUnderStatus();
+            }
+        });
         // Ready before the first press of Down, so the grid never waits for it.
         makeAppleBlur();
+    }
+
+    /**
+     * Each grid row's fade under the status capsule (AppleTv.statusFade), as transition alpha so it never fights the
+     * alpha the peek and the reorder modes animate.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private void fadeUnderStatus() {
+        grid.getLocationInWindow(gridAt);
+        float pad = AppleTv.ITEM_PAD * density;
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View item = grid.getChildAt(i);
+            item.setTransitionAlpha(AppleTv.statusFade((gridAt[1] + item.getTop() + pad) / density));
+        }
     }
 
     /**
@@ -2398,6 +2426,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (items == null || items.isEmpty()) {
             if (shelfItemShown) {
                 shelfItemShown = false;
+                heroMeta.setCompoundDrawablesRelative(null, null, null, null);
                 heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 66f);
                 heroName.setMaxLines(1);
                 updateHeroMeta(position);
@@ -2410,6 +2439,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ShelfItems.Item item = items.get(shelfIndex);
         shelfItemShown = true;
         heroMeta.setText(label + " · " + getString(kindLabel(item.kind)));
+        heroMeta.setCompoundDrawablesRelative(shelfIcon(pkg), null, null, null);
+        heroMeta.setCompoundDrawablePadding((int) (7 * density));
         heroMeta.setVisibility(View.VISIBLE);
         String title = item.title == null || item.title.trim().isEmpty() ? label : item.title.trim();
         heroName.setText(title);
@@ -2436,6 +2467,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         drawDots(items.size(), shelfIndex);
         // Reduced motion keeps the first item: nothing moves on its own.
         if (items.size() > 1 && animations && !reducedMotion) handler.postDelayed(shelfAdvance, 8000);
+    }
+
+    /** The app's icon for the overline, 16dp with 4dp rounded corners; made once per app, null when it has none. */
+    private Drawable shelfIcon(String pkg) {
+        if (shelfIcons.containsKey(pkg)) return shelfIcons.get(pkg);
+        Drawable out = null;
+        try {
+            Drawable icon = getPackageManager().getApplicationIcon(pkg);
+            int px = Math.max(1, Math.round(16 * density));
+            Bitmap square = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
+            icon.setBounds(0, 0, px, px);
+            icon.draw(new Canvas(square));
+            // Rounded through a shader rather than a clip, so the corners are antialiased.
+            Bitmap round = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
+            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            paint.setShader(new android.graphics.BitmapShader(square, android.graphics.Shader.TileMode.CLAMP,
+                    android.graphics.Shader.TileMode.CLAMP));
+            new Canvas(round).drawRoundRect(0, 0, px, px, 4 * density, 4 * density, paint);
+            square.recycle();
+            out = new BitmapDrawable(getResources(), round);
+            out.setBounds(0, 0, px, px);
+        } catch (android.content.pm.PackageManager.NameNotFoundException | RuntimeException ignored) {
+            // no icon: the overline is text only
+        }
+        shelfIcons.put(pkg, out);
+        return out;
     }
 
     private static int kindLabel(int kind) {

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -103,6 +104,8 @@ final class AppLibraryDialog {
     private float scrollOffset;
     private boolean highlightShown;
     private final int catalogWidth;
+    /** appletv_home: the system font, and glass cards that turn opaque white when focused (appleStyle). */
+    private boolean apple;
 
     private void stopHighlight() {
         if (spring != null) spring.cancel();
@@ -112,7 +115,8 @@ final class AppLibraryDialog {
     }
 
     private void highlight(View card, boolean animate) {
-        if (highlight == null || card.getParent() == null) return;
+        // appletv_home: the focused card itself turns white; no glass slides behind it.
+        if (apple || highlight == null || card.getParent() == null) return;
         Rect rect = new Rect(0, 0, card.getWidth(), card.getHeight());
         shelf.offsetDescendantRectToMyCoords(card, rect);
         ViewGroup.LayoutParams lp = highlight.getLayoutParams();
@@ -179,6 +183,35 @@ final class AppLibraryDialog {
             icons.clear();
             dismissed.run();
         });
+    }
+
+    /**
+     * appletv_home's look, set before show(): system sans-serif instead of Outfit, the status capsule's glass on the
+     * panel's rim and on the cards (white 14%, a 1dp white 32% rim), and a focused card opaque white with dark text.
+     */
+    void appleStyle() {
+        apple = true;
+        GradientDrawable bg = new GradientDrawable();
+        // Darker than the capsule's glass, so the names stay readable over the tiles without a blur.
+        bg.setColor(0xF0242428);
+        bg.setCornerRadius(dp(20));
+        bg.setStroke(Math.max(1, dp(1)), 0x52FFFFFF);
+        panel.setBackground(bg);
+    }
+
+    /** An appletv_home card: glass at rest, opaque white when focused. */
+    private android.graphics.drawable.StateListDrawable appleCard() {
+        GradientDrawable lit = new GradientDrawable();
+        lit.setColor(0xF2FFFFFF);
+        lit.setCornerRadius(dp(18));
+        GradientDrawable rest = new GradientDrawable();
+        rest.setColor(0x24FFFFFF);
+        rest.setCornerRadius(dp(18));
+        rest.setStroke(Math.max(1, dp(1)), 0x52FFFFFF);
+        android.graphics.drawable.StateListDrawable card = new android.graphics.drawable.StateListDrawable();
+        card.addState(new int[]{android.R.attr.state_focused}, lit);
+        card.addState(new int[0], rest);
+        return card;
     }
 
     void close() {
@@ -599,7 +632,7 @@ final class AppLibraryDialog {
         view.setGravity(rtl ? Gravity.RIGHT : Gravity.LEFT);
         view.setTextSize(size);
         view.setTextColor(color);
-        view.setTypeface(UiFont.get(activity, R.string.font_medium));
+        view.setTypeface(apple ? Typeface.create("sans-serif-medium", Typeface.NORMAL) : UiFont.get(activity, R.string.font_medium));
         view.setLetterSpacing(0.01f);
         view.setIncludeFontPadding(false);
         return view;
@@ -655,7 +688,12 @@ final class AppLibraryDialog {
             boolean recent = !selectionMode && LibraryApps.recent(installTimes.getOrDefault(pkg, 0L), catalogTime);
             status.setText(home ? R.string.library_on_home : recent ? R.string.library_recent : R.string.library_add_home);
             status.setVisibility(home || !okOpens ? View.VISIBLE : View.INVISIBLE);
-            holder.itemView.setBackground(surface(home ? 0x1475BBA4 : 0x0CFFFFFF, 18));
+            holder.itemView.setBackground(apple ? appleCard() : surface(home ? 0x1475BBA4 : 0x0CFFFFFF, 18));
+            if (apple) {
+                boolean lit = holder.itemView.hasFocus();
+                name.setTextColor(lit ? 0xFF1C1C1E : Color.WHITE);
+                status.setTextColor(lit ? 0x991C1C1E : 0xBBFFFFFF);
+            }
             View check = holder.itemView.findViewById(R.id.dot);
             check.getLayoutParams().width = dp(home ? 18 : 8);
             check.getLayoutParams().height = dp(home ? 18 : 8);
@@ -669,6 +707,10 @@ final class AppLibraryDialog {
             });
             holder.itemView.setOnLongClickListener(selectionMode ? null : v -> { showActions(app, v); return true; });
             holder.itemView.setOnFocusChangeListener((v, focused) -> {
+                if (apple) {
+                    name.setTextColor(focused ? 0xFF1C1C1E : Color.WHITE);
+                    status.setTextColor(focused ? 0x991C1C1E : 0xBBFFFFFF);
+                }
                 if (focused) {
                     selectedPackage = pkg;
                     instructions.setText(hint(onHome.test(pkg)));

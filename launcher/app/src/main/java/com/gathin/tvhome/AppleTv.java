@@ -23,6 +23,19 @@ final class AppleTv {
     static final int BLUR_W = 320, BLUR_H = 180;
     static final float BLUR_BRIGHTNESS = 0.42f;
 
+    /** The status capsule's bottom edge (top 26dp, 32dp tall), and the band above GRID_TOP where rows fade out. */
+    static final int STATUS_BOTTOM = 58, STATUS_FADE = 16;
+
+    /**
+     * How visible a grid row is whose tile top sits at tileTop (dp from the screen's top): whole from just under the
+     * status capsule (GRID_TOP less the zoom's growth), fading over STATUS_FADE above that and gone before its tiles
+     * reach the capsule, so the grid's content stays below the status as tvOS keeps it.
+     */
+    static float statusFade(float tileTop) {
+        float clear = GRID_TOP - 4;
+        return Math.max(0f, Math.min(1f, (tileTop - (clear - STATUS_FADE)) / STATUS_FADE));
+    }
+
     /** Grid padding left and right: the tile is centred in its cell, so the cell starts half a gap before LEFT. */
     static int sidePadding() {
         return LEFT - GAP / 2;

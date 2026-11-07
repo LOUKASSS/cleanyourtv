@@ -22,6 +22,18 @@ public class AppleTvTest {
     }
 
     @Test
+    public void gridRowsFadeBeforeReachingTheStatusCapsule() {
+        // The top row at GRID_TOP, zoomed (its top 5dp higher), stays whole.
+        assertEquals(1f, AppleTv.statusFade(AppleTv.GRID_TOP), 0f);
+        assertEquals(1f, AppleTv.statusFade(AppleTv.GRID_TOP - 4), 0f);
+        assertEquals(0.5f, AppleTv.statusFade(AppleTv.GRID_TOP - 4 - AppleTv.STATUS_FADE / 2f), 0.001f);
+        // Gone by the time the tile would reach the capsule's bottom edge.
+        assertEquals(0f, AppleTv.statusFade(AppleTv.GRID_TOP - 4 - AppleTv.STATUS_FADE), 0f);
+        assertEquals(0f, AppleTv.statusFade(-40), 0f);
+        assertEquals(true, AppleTv.GRID_TOP - 4 - AppleTv.STATUS_FADE <= AppleTv.STATUS_BOTTOM);
+    }
+
+    @Test
     public void centerCropCutsTheSidesOfAWidePicture() {
         // A 16:9 banner in a 5:3 tile: 1600x900 keeps a 1500x900 window in the middle.
         assertArrayEquals(new int[]{50, 0, 1500, 900}, AppleTv.centerCrop(1600, 900, 125, 75));

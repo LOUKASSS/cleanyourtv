@@ -392,6 +392,26 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return width <= 0 || height <= 0 || width >= height * 1.4f;
     }
 
+    /**
+     * appletv_home's pill: the status capsule's glass (white 14%, a 1dp white 32% rim) in the system font; focused,
+     * opaque white with dark text (pill_text already turns dark on focus).
+     */
+    private static void appleGlass(TextView pill) {
+        float density = pill.getResources().getDisplayMetrics().density;
+        GradientDrawable lit = new GradientDrawable();
+        lit.setColor(0xF2FFFFFF);
+        lit.setCornerRadius(21 * density);
+        GradientDrawable rest = new GradientDrawable();
+        rest.setColor(0x24FFFFFF);
+        rest.setCornerRadius(21 * density);
+        rest.setStroke(Math.max(1, Math.round(density)), 0x52FFFFFF);
+        android.graphics.drawable.StateListDrawable bg = new android.graphics.drawable.StateListDrawable();
+        bg.addState(new int[]{android.R.attr.state_focused}, lit);
+        bg.addState(new int[0], rest);
+        pill.setBackground(bg);
+        pill.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+    }
+
     /** Lets go of every tile and its artwork (Home is in the background and memory is short). */
     void clear() {
         items.clear();
@@ -403,7 +423,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         if (viewType == 1) {
             View row = LayoutInflater.from(ctx).inflate(R.layout.row_app_library, parent, false);
-            View button = row.findViewById(R.id.btnLibrary);
+            TextView button = row.findViewById(R.id.btnLibrary);
+            if (appleTv) appleGlass(button);
             button.setOnClickListener(v -> listener.onLibraryRequested());
             button.setOnFocusChangeListener((v, focused) -> { if (focused) listener.onLibraryFocused(); });
             button.setOnKeyListener((v, key, event) -> {
