@@ -2030,12 +2030,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (advancedEffects || appleTv) hero.animate().cancel();
             // appletv_home: a plain cross-fade of 80 + 100 ms, no slide.
             float slide = appleTv ? 0f : 12 * density;
-            hero.animate().alpha(0f).translationX(-slide).setDuration(appleTv ? 80 : 120).withEndAction(() -> {
+            // appletv_home: in a hardware layer, so each frame of the fade composites one texture instead of
+            // drawing the shelf's text into an offscreen buffer again (the TCL G08's GPU is the bottleneck).
+            fadeHero(hero.animate().alpha(0f).translationX(-slide).setDuration(appleTv ? 80 : 120).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
                 hero.setTranslationX(slide);
-                hero.animate().alpha(1f).translationX(0f).setDuration(appleTv ? 100 : 200).start();
-            }).start();
+                fadeHero(hero.animate().alpha(1f).translationX(0f).setDuration(appleTv ? 100 : 200)).start();
+            })).start();
             if (ambientGlow && advancedEffects) {
                 transitionAmbient(color);
             } else if (ambientGlow && color != ambientColor && glowSnap) {
@@ -2057,6 +2059,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 ambient.animate().alpha(1f).setDuration(600).start();
             }
         }
+    }
+
+    /** appletv_home's shelf fades run in a hardware layer; the other shelves are left as they were. */
+    private android.view.ViewPropertyAnimator fadeHero(android.view.ViewPropertyAnimator fade) {
+        return appleTv ? fade.withLayer() : fade;
     }
 
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
@@ -2760,10 +2767,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         int position = lastFocused;
         String label = adapter.labelAt(position);
         hero.animate().cancel();
-        hero.animate().alpha(0f).setDuration(120).withEndAction(() -> {
+        fadeHero(hero.animate().alpha(0f).setDuration(120).withEndAction(() -> {
             fillShelf(position, label);
-            hero.animate().alpha(1f).setDuration(180).start();
-        }).start();
+            fadeHero(hero.animate().alpha(1f).setDuration(180)).start();
+        })).start();
         showShelfArt();
     }
 
