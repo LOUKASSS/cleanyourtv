@@ -321,6 +321,11 @@ final class ControlPanel implements MainActivity.InputSink {
         for (int i = 0; i < tiles.size(); i += 2) {
             LinearLayout line = new LinearLayout(activity);
             line.setOrientation(LinearLayout.HORIZONTAL);
+            // The focused tile grows 4%: let it draw past its row (and the row past the panel) instead of being cut.
+            line.setClipChildren(false);
+            line.setClipToPadding(false);
+            panel.setClipChildren(false);
+            panel.setClipToPadding(false);
             boolean alone = i + 1 >= tiles.size();
             for (int j = i; j < Math.min(tiles.size(), i + 2); j++) {
                 // A tile alone on its row takes the whole width.
