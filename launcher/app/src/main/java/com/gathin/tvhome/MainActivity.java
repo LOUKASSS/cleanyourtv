@@ -186,6 +186,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean appleBlurring;
     /** The dock's decoration, whose room above the row onTileFocused takes off when it parks the dock. */
     private DockDecoration dockDecoration;
+    /** appletv_shelf: the rows reader and poster loader, null with the switch off; the rows it last read, by package. */
+    private TvShelf tvShelf;
+    private Map<String, List<ShelfItems.Item>> shelfRows = java.util.Collections.emptyMap();
+    /** appletv_shelf: the poster behind the shelf, the line under the title and the progress row with its bar. */
+    private ImageView shelfArt;
+    private TextView shelfSub, shelfLeft;
+    private View shelfProgress;
+    private android.graphics.drawable.ClipDrawable shelfBar;
+    /** The dock app the shelf is on, which of its items shows, and what that app's items were when last drawn. */
+    private String shelfPkg, shelfSig;
+    private int shelfIndex;
+    /** The shelf shows an item (not the app's name), so "Last opened" stays out of the overline. */
+    private boolean shelfItemShown;
+    private final Runnable shelfSettled = this::shelfSettled;
+    private final Runnable shelfAdvance = this::advanceShelf;
     private int ambientColor = -1;
     private ValueAnimator ambientAnimator;
     /** config.xml glow_snap: the glow takes a new colour in one frame instead of the dip-and-fade. */
@@ -952,6 +967,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         if (appleTv) {
             setUpAppleTv(cfg);
+            if (cfg.appleTvShelf) setUpShelf();
             // The pills' keys: Down to the dock tile Up came from, Up kept here; Left and Right stay (layout).
             appleStatus.setOnKeyListener(pillKeys);
         }
@@ -1128,6 +1144,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         restartIdleClock();
         promptsPaused = false;
+        if (tvShelf != null) tvShelf.refresh(this::onShelfRows);
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         switch (tileRefresh.onResume(packagesChangedSinceRebuild())) {
             case REBUILD:
@@ -1349,6 +1366,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         handler.removeCallbacks(turnTick);
         if (lamp != null) lamp.stop();
         cancelPendingFocusScroll();
+        handler.removeCallbacks(shelfSettled);
+        handler.removeCallbacks(shelfAdvance);
         // Nothing of ours stays on screen over another app; an undecided prompt simply returns next time.
         if (cardPrompt != null) cardPrompt.dismiss();
         if (appLibrary != null) appLibrary.close();
@@ -1385,6 +1404,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroArtCache.clear();
         heroArtKey = null;
         releaseAppleBlur();
+        if (tvShelf != null) {
+            tvShelf.trim();
+            shelfArt.setImageDrawable(null);
+            shelfArt.setAlpha(0f);
+        }
         wallpaperPlayer.releaseForMemoryPressure();
         tileRefresh.invalidate();
     }
@@ -1410,6 +1434,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
         wallpaperPlayer.close();
+        if (tvShelf != null) tvShelf.close();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
@@ -2021,6 +2046,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!cinematic) return;
         updateHeroMeta(position);
         updateHeroDots(position);
+        if (tvShelf != null) fillShelf(position, label);
     }
 
     // ---- cinematic shelf -------------------------------------------------------------------------
@@ -2118,7 +2144,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dots.setMarginStart(0);
         // The dots sit at DOTS_TOP whatever the name's line height: nudge their margin once the shelf is laid out.
         hero.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            int want = dots.topMargin + (int) ((AppleTv.DOTS_TOP - AppleTv.SHELF_TOP) * density) - heroDots.getTop();
+            // Never closer than 6dp under the text above, should an item's lines run past DOTS_TOP.
+            int want = Math.max((int) (6 * density),
+                    dots.topMargin + (int) ((AppleTv.DOTS_TOP - AppleTv.SHELF_TOP) * density) - heroDots.getTop());
             if (want != dots.topMargin && heroDots.getTop() > 0) {
                 dots.topMargin = want;
                 heroDots.post(heroDots::requestLayout);
@@ -2281,6 +2309,244 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         appleBlurFrom = null;
     }
 
+    // ---- appletv_shelf ---------------------------------------------------------------------------
+
+    /**
+     * appletv_shelf: the poster layer over the wallpaper (under the blurred copy and the scrim), and the episode line
+     * and progress row under the title. Nothing is read until the first resume.
+     */
+    private void setUpShelf() {
+        tvShelf = new TvShelf(this);
+        shelfArt = new ImageView(this);
+        shelfArt.setScaleType(ImageView.ScaleType.FIT_XY);   // the posters arrive cropped to 16:9
+        shelfArt.setAlpha(0f);
+        shelfArt.forceHasOverlappingRendering(false);
+        shelfArt.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        // A poster is brighter and busier than the theme's photo: a little more shade on the text's side and along the
+        // top for the capsule, drawn over the poster so it comes and goes with it.
+        shelfArt.setForeground(scrimDrawable(new int[]{0x66000000, 0x1A000000, 0}, new float[]{0f, 0.4f, 0.65f},
+                new int[]{0x59000000, 0, 0}, new float[]{0f, 0.2f, 1f}));
+        root.addView(shelfArt, root.indexOfChild(appleBlur), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // One line, or two for a long title (fillShelf); a single-line view would never wrap.
+        heroName.setSingleLine(false);
+        heroName.setMaxLines(1);
+        LinearLayout shelf = (LinearLayout) hero;
+        int at = shelf.indexOfChild(heroName) + 1;
+        shelfSub = new TextView(this);
+        shelfSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        shelfSub.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        shelfSub.setTextColor(0xD9FFFFFF);
+        shelfSub.setSingleLine(true);
+        shelfSub.setEllipsize(TextUtils.TruncateAt.END);
+        shelfSub.setMaxWidth((int) (640 * density));
+        shelfSub.setShadowLayer(8 * density, 0, density, 0x40000000);
+        shelfSub.setVisibility(View.GONE);
+        LinearLayout.LayoutParams sub = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sub.topMargin = (int) (4 * density);
+        shelf.addView(shelfSub, at, sub);
+
+        // The bar: 150x4dp, white over white 28%, as tvOS draws an episode's progress.
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable track = new GradientDrawable();
+        track.setCornerRadius(2 * density);
+        track.setColor(0x47FFFFFF);
+        GradientDrawable fill = new GradientDrawable();
+        fill.setCornerRadius(2 * density);
+        fill.setColor(0xFFFFFFFF);
+        shelfBar = new android.graphics.drawable.ClipDrawable(fill, Gravity.START, android.graphics.drawable.ClipDrawable.HORIZONTAL);
+        View bar = new View(this);
+        bar.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{track, shelfBar}));
+        row.addView(bar, new LinearLayout.LayoutParams((int) (150 * density), (int) (4 * density)));
+        shelfLeft = new TextView(this);
+        shelfLeft.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        shelfLeft.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        shelfLeft.setTextColor(0xBFFFFFFF);
+        shelfLeft.setSingleLine(true);
+        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        left.setMarginStart((int) (9 * density));
+        row.addView(shelfLeft, left);
+        row.setVisibility(View.GONE);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = (int) (9 * density);
+        shelf.addView(row, at + 1, rowLp);
+        shelfProgress = row;
+    }
+
+    /**
+     * The shelf's text for a dock app with rows: "<APP> · CONTINUE" above the title, the episode line, the progress
+     * and one dot per item. An app without rows keeps what fillHero wrote (its name, "Last opened", the dock's dots).
+     * Moving to another app starts the 250 ms wait before its poster loads and the rows are read again.
+     */
+    private void fillShelf(int position, String label) {
+        String pkg = adapter.packageAt(position);
+        if (pkg != null && !pkg.equals(shelfPkg)) {
+            shelfPkg = pkg;
+            shelfIndex = 0;
+            handler.removeCallbacks(shelfSettled);
+            handler.postDelayed(shelfSettled, 250);
+        }
+        List<ShelfItems.Item> items = pkg == null ? null : shelfRows.get(pkg);
+        shelfSig = signature(items);
+        handler.removeCallbacks(shelfAdvance);
+        if (items == null || items.isEmpty()) {
+            if (shelfItemShown) {
+                shelfItemShown = false;
+                heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 66f);
+                heroName.setMaxLines(1);
+                updateHeroMeta(position);
+            }
+            shelfSub.setVisibility(View.GONE);
+            shelfProgress.setVisibility(View.GONE);
+            return;
+        }
+        if (shelfIndex >= items.size()) shelfIndex = 0;
+        ShelfItems.Item item = items.get(shelfIndex);
+        shelfItemShown = true;
+        heroMeta.setText(label + " · " + getString(kindLabel(item.kind)));
+        heroMeta.setVisibility(View.VISIBLE);
+        String title = item.title == null || item.title.trim().isEmpty() ? label : item.title.trim();
+        heroName.setText(title);
+        float sp = ShelfItems.titleSp(title);
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        // The smallest size wraps once rather than cutting a long title short.
+        heroName.setMaxLines(sp <= 40f ? 2 : 1);
+        String sub = ShelfItems.subtitle(item, getText(R.string.shelf_season_episode).toString(), getText(R.string.shelf_episode).toString(),
+                getText(R.string.shelf_quoted).toString());
+        // A preview program with no episode says what it is in its short description, when it has one.
+        if (sub.isEmpty() && item.kind == ShelfItems.PREVIEW && item.description != null) sub = item.description.trim();
+        shelfSub.setText(sub);
+        shelfSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+        int permille = item.kind == ShelfItems.PREVIEW ? -1 : ShelfItems.permille(item.duration, item.position);
+        if (permille >= 0) {
+            shelfBar.setLevel(permille * 10);
+            long min = ShelfItems.minutesLeft(item.duration, item.position);
+            shelfLeft.setText(min >= 60 ? getString(R.string.shelf_left_hours, (int) (min / 60), (int) (min % 60))
+                    : getString(R.string.shelf_left_min, (int) min));
+            shelfProgress.setVisibility(View.VISIBLE);
+        } else {
+            shelfProgress.setVisibility(View.GONE);
+        }
+        drawDots(items.size(), shelfIndex);
+        // Reduced motion keeps the first item: nothing moves on its own.
+        if (items.size() > 1 && animations && !reducedMotion) handler.postDelayed(shelfAdvance, 8000);
+    }
+
+    private static int kindLabel(int kind) {
+        switch (kind) {
+            case ShelfItems.CONTINUE: return R.string.shelf_continue;
+            case ShelfItems.NEXT: return R.string.shelf_next;
+            case ShelfItems.NEW: return R.string.shelf_new;
+            case ShelfItems.WATCHLIST: return R.string.shelf_watchlist;
+            default: return R.string.shelf_featured;
+        }
+    }
+
+    /** What an app's items say, so a new read only redraws the shelf when something it shows changed. */
+    private static String signature(List<ShelfItems.Item> items) {
+        if (items == null) return "";
+        StringBuilder s = new StringBuilder();
+        for (ShelfItems.Item i : items) {
+            s.append(i.id).append(i.kind).append(i.title).append(i.episodeTitle).append(i.season).append(i.episode)
+                    .append(i.position).append(i.duration).append(ShelfItems.picture(i)).append('|');
+        }
+        return s.toString();
+    }
+
+    /** The shelf is on screen for a dock app: focus rests on the dock, Home in front. */
+    private boolean shelfOnDock() {
+        return resumed && heroShown && !appleInGrid && shelfPkg != null;
+    }
+
+    /** Focus rested 250 ms on a dock app: its poster, and a fresh read of the rows. */
+    private void shelfSettled() {
+        if (!shelfOnDock()) return;
+        showShelfArt();
+        tvShelf.refresh(this::onShelfRows);
+    }
+
+    /** New rows from TvShelf: redraw the shelf only if the focused app's items changed. */
+    private void onShelfRows(Map<String, List<ShelfItems.Item>> rows) {
+        shelfRows = rows;
+        if (!shelfOnDock() || lastFocused < 0 || lastFocused >= COLUMNS) return;
+        if (signature(rows.get(shelfPkg)).equals(shelfSig)) {
+            // The same items, but the poster may have been let go of (onTrimMemory) while Home was away.
+            if (shelfArt.getDrawable() == null) showShelfArt();
+            return;
+        }
+        fillShelf(lastFocused, adapter.labelAt(lastFocused));
+        showShelfArt();
+    }
+
+    /** Every 8 s on the dock: the app's next item, text and poster cross-fading. */
+    private void advanceShelf() {
+        List<ShelfItems.Item> items = shelfPkg == null ? null : shelfRows.get(shelfPkg);
+        if (!shelfOnDock() || items == null || items.size() < 2 || lastFocused < 0 || lastFocused >= COLUMNS) return;
+        shelfIndex = (shelfIndex + 1) % items.size();
+        int position = lastFocused;
+        String label = adapter.labelAt(position);
+        hero.animate().cancel();
+        hero.animate().alpha(0f).setDuration(120).withEndAction(() -> {
+            fillShelf(position, label);
+            hero.animate().alpha(1f).setDuration(180).start();
+        }).start();
+        showShelfArt();
+    }
+
+    /** The current item's poster over the wallpaper, or the wallpaper alone for an app with none. */
+    private void showShelfArt() {
+        List<ShelfItems.Item> items = shelfPkg == null ? null : shelfRows.get(shelfPkg);
+        ShelfItems.Item item = items == null || items.isEmpty() ? null : items.get(Math.min(shelfIndex, items.size() - 1));
+        String uri = item == null ? null : ShelfItems.picture(item);
+        if (uri == null) {
+            fadeShelfArt(null);
+            return;
+        }
+        String pkg = shelfPkg;
+        tvShelf.poster(uri, bmp -> {
+            if (pkg.equals(shelfPkg) && shelfOnDock()) fadeShelfArt(bmp);
+        });
+        if (items.size() > 1) tvShelf.prefetch(ShelfItems.picture(items.get((shelfIndex + 1) % items.size())));
+    }
+
+    /** Cross-fades the backdrop to bmp in 300 ms, or back to the wallpaper when it is null. */
+    private void fadeShelfArt(Bitmap bmp) {
+        int ms = !animations ? 0 : reducedMotion ? Motion.REDUCED_MS : 300;
+        shelfArt.animate().cancel();
+        if (bmp == null) {
+            shelfArt.animate().alpha(0f).setDuration(ms).start();
+            return;
+        }
+        Drawable now = shelfArt.getDrawable();
+        if (now instanceof android.graphics.drawable.TransitionDrawable) {
+            now = ((android.graphics.drawable.TransitionDrawable) now).getDrawable(1);
+        }
+        if (now instanceof BitmapDrawable && ((BitmapDrawable) now).getBitmap() == bmp && shelfArt.getAlpha() > 0f) {
+            shelfArt.animate().alpha(1f).setDuration(ms).start();
+            return;
+        }
+        BitmapDrawable next = new BitmapDrawable(getResources(), bmp);
+        if (now == null || shelfArt.getAlpha() == 0f || ms == 0) {
+            // Over the wallpaper: fade the layer in.
+            shelfArt.setImageDrawable(next);
+            if (ms == 0) shelfArt.setAlpha(1f);
+            else shelfArt.animate().alpha(1f).setDuration(ms).start();
+            return;
+        }
+        android.graphics.drawable.TransitionDrawable swap =
+                new android.graphics.drawable.TransitionDrawable(new Drawable[]{now, next});
+        swap.setCrossFadeEnabled(true);
+        shelfArt.setImageDrawable(swap);
+        shelfArt.setAlpha(1f);
+        swap.startTransition(ms);
+    }
+
     /** Swaps the backdrop to this app's artwork: fade out, swap, fade in, the way the shelf's name changes. */
     private void showHeroArt(int position) {
         String key = adapter.keyAt(position);
@@ -2315,6 +2581,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** "Last opened yesterday, 9:40 PM", the time in white; nothing (but the same height) when it was never seen. */
     private void updateHeroMeta(int position) {
+        if (shelfItemShown) return;
         long when = LastOpened.get(this, adapter.packageAt(position));
         if (when <= 0) {
             heroMeta.setVisibility(View.INVISIBLE);
@@ -2331,8 +2598,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** One dot per dock app, the focused one drawn long and white. Hebrew docks start on the right, so do the dots. */
     private void updateHeroDots(int position) {
+        drawDots(Math.min(adapter.dockFilled(), COLUMNS), position);
+    }
+
+    /** count dots, the one at position long; appletv_shelf draws one per item of the app instead of one per app. */
+    private void drawDots(int count, int position) {
         if (!heroDotsShown) return;
-        int count = Math.min(adapter.dockFilled(), COLUMNS);
         heroDots.setVisibility(count > 1 ? View.VISIBLE : View.INVISIBLE);
         if (heroDots.getChildCount() != count) {
             heroDots.removeAllViews();

@@ -152,4 +152,14 @@
     <string name="clock_format_system">מערכת</string>
     <string name="clock_format_12">12 שעות</string>
     <string name="clock_format_24">24 שעות</string>
+    <string name="shelf_continue">המשך צפייה</string>
+    <string name="shelf_next">הבא בתור</string>
+    <string name="shelf_new">חדש</string>
+    <string name="shelf_watchlist">רשימת הצפייה</string>
+    <string name="shelf_featured">מומלץ</string>
+    <string name="shelf_season_episode">עונה %1$s · פרק %2$s</string>
+    <string name="shelf_episode">פרק %1$s</string>
+    <string name="shelf_quoted">“%1$s”</string>
+    <string name="shelf_left_min">נותרו %1$d דק׳</string>
+    <string name="shelf_left_hours">נותרו %1$d שע׳ %2$02d דק׳</string>
 </resources>

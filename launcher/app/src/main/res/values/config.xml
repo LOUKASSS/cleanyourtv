@@ -505,6 +505,13 @@
          Turns on cinematic_home and dock_row and leaves out the header, the pills and the coloured glow. false
          keeps Home as it is. Can also be set with "appletv_home": true in a theme's config.json. -->
     <bool name="appletv_home">false</bool>
+    <!-- With appletv_home: the top shelf shows what the focused dock app publishes to the system's Continue
+         watching (Watch Next) or, failing that, its preview channels: the poster full screen, the title, the episode,
+         the progress and up to five items that advance every 8 seconds. Needs READ_TV_LISTINGS, a runtime permission
+         granted with pm grant, and downloads https:// posters (cached in the app's cache folder), so this is the
+         launcher's only network use. An app with no rows keeps the wallpaper and its name. false reads nothing.
+         Can also be set with "appletv_shelf": true in a theme's config.json. -->
+    <bool name="appletv_shelf">false</bool>
 
     <!-- The glow behind the dock in the focused app's colour (red for YouTube, blue for Prime Video). false keeps
          only background_color or the wallpaper behind everything. Can also be set with "ambient_glow": false in a

@@ -158,4 +158,15 @@
     <string name="clock_format_system">System</string>
     <string name="clock_format_12">12-hour</string>
     <string name="clock_format_24">24-hour</string>
+    <!-- appletv_shelf: the line above an item's title ("PRIME VIDEO · CONTINUE"), its episode line and the time left. -->
+    <string name="shelf_continue">Continue</string>
+    <string name="shelf_next">Up next</string>
+    <string name="shelf_new">New</string>
+    <string name="shelf_watchlist">Watchlist</string>
+    <string name="shelf_featured">Featured</string>
+    <string name="shelf_season_episode">Season %1$s · Episode %2$s</string>
+    <string name="shelf_episode">Episode %1$s</string>
+    <string name="shelf_quoted">“%1$s”</string>
+    <string name="shelf_left_min">%1$d min left</string>
+    <string name="shelf_left_hours">%1$d h %2$02d min left</string>
 </resources>

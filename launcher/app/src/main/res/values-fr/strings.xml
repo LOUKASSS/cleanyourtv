@@ -98,4 +98,14 @@
     <string name="clock_format_system">Système</string>
     <string name="clock_format_12">12 heures</string>
     <string name="clock_format_24">24 heures</string>
+    <string name="shelf_continue">Reprendre</string>
+    <string name="shelf_next">À suivre</string>
+    <string name="shelf_new">Nouveau</string>
+    <string name="shelf_watchlist">Ma liste</string>
+    <string name="shelf_featured">À la une</string>
+    <string name="shelf_season_episode">Saison %1$s · Épisode %2$s</string>
+    <string name="shelf_episode">Épisode %1$s</string>
+    <string name="shelf_quoted">« %1$s »</string>
+    <string name="shelf_left_min">%1$d min restantes</string>
+    <string name="shelf_left_hours">%1$d h %2$02d restantes</string>
 </resources>
