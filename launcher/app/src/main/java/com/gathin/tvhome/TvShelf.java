@@ -97,8 +97,11 @@ final class TvShelf {
     private final Context context;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
-    /** The last three backdrops, by URI. */
-    private final LruCache<String, Bitmap> memory = new LruCache<>(3);
+    /**
+     * The backdrops of the focused app's items (up to ShelfItems.MAX), by URI: the auto-advance cycles through them
+     * without decoding each poster from disk again. Hardware bitmaps, held in GPU memory only.
+     */
+    private final LruCache<String, Bitmap> memory = new LruCache<>(ShelfItems.MAX);
     private final File dir;
     /** The posters still wanted: a load queued for any other is dropped when its turn comes. */
     private volatile String wanted, prefetch;
