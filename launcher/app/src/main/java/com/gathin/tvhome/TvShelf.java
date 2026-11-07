@@ -268,7 +268,7 @@ final class TvShelf {
         wanted = uri;
         io.execute(() -> {
             if (!uri.equals(wanted)) return;
-            Bitmap bmp = load(uri);
+            Bitmap bmp = gpu(load(uri));
             main.post(() -> {
                 if (bmp != null) memory.put(uri, bmp);
                 if (uri.equals(wanted)) done.accept(bmp);
@@ -306,6 +306,19 @@ final class TvShelf {
         if (bmp == null) bmp = loadOne(uri);
         int radius = bmp == null ? 0 : ShelfItems.softRadius(bmp.getWidth());
         return radius == 0 ? bmp : soften(bmp, radius);
+    }
+
+    /**
+     * The backdrop as a hardware bitmap, as WallpaperPlayer keeps the wallpaper: uploaded here, on this thread, instead
+     * of on the render thread during the cross-fade's first frame, and held once in GPU memory rather than also in the
+     * heap. The software copy when the TV refuses one.
+     */
+    private static Bitmap gpu(Bitmap bmp) {
+        if (bmp == null) return null;
+        Bitmap hw = bmp.copy(Bitmap.Config.HARDWARE, false);
+        if (hw == null) return bmp;
+        bmp.recycle();
+        return hw;
     }
 
     private File cacheFile(String uri) {
